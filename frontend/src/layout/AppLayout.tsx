@@ -16,8 +16,10 @@ import {
   FileTextOutlined,
   LinkOutlined,
   DownOutlined,
+  BellOutlined,
 } from '@ant-design/icons';
-import Logo from  '../assets/razor-pay-logo.png';
+import Logo from '../assets/razor-pay-logo.png';
+
 interface SidebarItem {
   key: string;
   icon: React.ReactNode;
@@ -44,10 +46,9 @@ export default function AppLayout() {
   };
 
   const navItems = [
-    { key: '/', label: 'Recovery Home', icon: <HomeOutlined /> },
-    { key: '/trace', label: 'Decisions', icon: <ThunderboltOutlined /> },
-    { key: '/batch', label: 'Measurement', icon: <BarChartOutlined /> },
-    { key: 'more', label: 'More' },
+    { key: '/', label: 'Home' },
+    { key: '/trace', label: 'Decisions' },
+    { key: '/batch', label: 'Measurement' },
   ];
 
   const mainItems: SidebarItem[] = [
@@ -77,16 +78,19 @@ export default function AppLayout() {
   return (
     <div className="min-h-screen flex flex-col">
       {/* ═══════ TOP NAV BAR ═══════ */}
-      <header
-        className="h-[52px] flex items-center justify-between px-5 shrink-0"
-        style={{ background: '#010100' }}
-      >
+      <header className="h-[56px] flex items-center justify-between px-6 shrink-0 bg-white border-b border-[#e8e8e8]">
         {/* Left — logo + nav */}
-        <div className="flex items-center h-full gap-6">
+        <div className="flex items-center h-full gap-5">
           {/* Logo */}
-          <div className="flex items-center gap-1 cursor-pointer select-none" onClick={() => navigate('/')}>
-            <span className="text-white font-bold text-[17px] italic leading-none -ml-0.5"><img className="h-10" src={Logo} alt="Logo" /></span>
+          <div
+            className="flex items-center cursor-pointer select-none shrink-0"
+            onClick={() => navigate('/')}
+          >
+            <img className="h-[30px]" src={Logo} alt="Logo" />
           </div>
+
+          {/* Divider */}
+          <div className="w-[1px] h-[24px] bg-[#e8e8e8]" />
 
           {/* Nav items */}
           <nav className="flex items-center h-full gap-1">
@@ -95,40 +99,22 @@ export default function AppLayout() {
               return (
                 <button
                   key={item.key}
-                  onClick={() => item.key !== 'more' && navigate(item.key)}
-                  className="border-0 cursor-pointer h-full flex items-center px-0 bg-transparent relative"
+                  onClick={() => navigate(item.key)}
+                  className={`
+                    border-0 cursor-pointer h-full flex items-center px-4 bg-transparent relative
+                    text-[13.5px] tracking-[-0.01em] transition-colors duration-150
+                    ${active
+                      ? 'text-[#1b1f2b] font-semibold'
+                      : 'text-[#6b7280] hover:text-[#1b1f2b]'
+                    }
+                  `}
                 >
-                  <div
-                    className={`
-                      flex items-center gap-1.5 px-3 py-1.5 rounded-md text-[13px] relative z-20
-                      ${active
-                        ? 'text-white font-medium'
-                        : 'text-[#8b92a5] hover:text-[#c5c9d6]'
-                      }
-                    `}
-                  >
-                    {item.icon && <span className="text-[12px]">{item.icon}</span>}
-                    <span>{item.label}</span>
-                    {item.key === 'more' && <DownOutlined className="text-[8px] ml-0.5" />}
-                  </div>
+                  {item.label}
                   {active && (
-                    <>
-                      <div
-                        className="absolute bottom-[6px] left-1/2 -translate-x-1/2 h-[1px] z-10"
-                        style={{
-                          width: '90%',
-                          background: 'linear-gradient(to right, transparent, rgba(255,255,255,0.8) 15%, #ffffff 50%, rgba(255,255,255,0.8) 85%, transparent)',
-                        }}
-                      />
-                      <div
-                        className="absolute bottom-[7px] left-1/2 -translate-x-1/2"
-                        style={{
-                          width: '120%',
-                          height: '150%',
-                          background: 'radial-gradient(ellipse 90% 120% at center bottom, rgba(5,52,133,1) 0%, rgba(5,52,133,0.5) 25%, rgba(5,52,133,0.2) 50%, transparent 75%)',
-                        }}
-                      />
-                    </>
+                    <div
+                      className="absolute bottom-0 left-4 right-4 h-[2px] rounded-t-full"
+                      style={{ background: '#1b1f2b' }}
+                    />
                   )}
                 </button>
               );
@@ -136,37 +122,49 @@ export default function AppLayout() {
           </nav>
         </div>
 
-        {/* Right — search + avatar */}
-        <div className="flex items-center gap-3">
-          <div
-            className="flex items-center rounded-full px-3 h-[32px] w-[320px] border border-[#2a2a2a]"
-            style={{ background: '#1a1a1a' }}
-          >
-            <SearchOutlined className="text-[#888] text-[13px] mr-2 shrink-0" />
+        {/* Right — search + controls */}
+        <div className="flex items-center gap-2">
+          {/* Search */}
+          <div className="flex items-center h-[34px] w-[240px] rounded-lg border border-[#e8e8e8] px-3 bg-[#fafafa] transition-colors duration-150 focus-within:border-[#c0c0c0] focus-within:bg-white">
+            <SearchOutlined className="text-[#9ca3af] text-[13px] mr-2 shrink-0" />
             <input
               type="text"
-              placeholder="Search products, settings..."
-              className="bg-transparent border-0 outline-none text-[13px] text-[#bbb] placeholder:text-[#777] w-full"
+              placeholder="Search..."
+              className="bg-transparent border-0 outline-none text-[13px] text-[#1b1f2b] placeholder:text-[#9ca3af] w-full"
             />
+            <kbd className="text-[10px] text-[#9ca3af] bg-white border border-[#e8e8e8] rounded px-1.5 py-0.5 ml-1 shrink-0 font-mono">/</kbd>
           </div>
-          <div className="w-8 h-8 rounded-full bg-[#1a1a1a] flex items-center justify-center cursor-pointer border border-[#2a2a2a]">
-            <UserOutlined className="text-[#999] text-[12px]" />
-          </div>
+
+          {/* Notification */}
+          <button className="w-[34px] h-[34px] rounded-lg border border-transparent hover:border-[#e8e8e8] hover:bg-[#fafafa] flex items-center justify-center bg-transparent cursor-pointer transition-all duration-150 relative">
+            <BellOutlined className="text-[15px] text-[#6b7280]" />
+            <span className="absolute top-[7px] right-[8px] w-[6px] h-[6px] rounded-full bg-[#1b1f2b]" />
+          </button>
+
+          {/* Divider */}
+          <div className="w-[1px] h-[24px] bg-[#e8e8e8] mx-1" />
+
+          {/* Profile */}
+          <button className="flex items-center gap-2.5 h-[34px] rounded-lg px-2 border border-transparent hover:border-[#e8e8e8] hover:bg-[#fafafa] bg-transparent cursor-pointer transition-all duration-150">
+            <div className="w-[26px] h-[26px] rounded-full bg-[#1b1f2b] flex items-center justify-center">
+              <span className="text-[11px] font-semibold text-white leading-none">RA</span>
+            </div>
+            <DownOutlined className="text-[8px] text-[#9ca3af]" />
+          </button>
         </div>
       </header>
 
-
       {/* ═══════ BODY ═══════ */}
-      <div className="flex flex-1 overflow-hidden">
+      <div className="flex flex-1 overflow-hidden bg-[#F7F6F6]">
         {/* ═══════ SIDEBAR ═══════ */}
-        <aside className="w-[250px] bg-[#F7F6F6] border-r border-[#e5e8ec] flex flex-col shrink-0 overflow-y-auto">
+        <aside className="w-[250px] bg-white m-3 mr-0 rounded-2xl border border-[#e8e8e8] flex flex-col shrink-0 overflow-y-auto">
           <nav className="flex-1 pt-2 pb-4">
             {mainItems.map((item) => (
               <div
                 key={item.key}
                 onClick={() => navigate(item.key)}
                 className={`
-                  flex items-center gap-3 mx-2.5 px-3 h-[40px] cursor-pointer text-[14px] transition-colors rounded-lg
+                  flex items-center gap-3 mx-2.5 px-3 h-[34px] mb-1 cursor-pointer text-[13px] transition-colors rounded-lg
                   ${isActive(item.key)
                     ? 'bg-[#e8e8e8] font-semibold text-[#1b1f2b]'
                     : 'text-[#3b4055] hover:bg-[#ededed]'
@@ -191,7 +189,7 @@ export default function AppLayout() {
                 key={item.key}
                 onClick={() => item.key === '/ledger' ? verifyLedger() : navigate(item.key)}
                 className={`
-                  flex items-center gap-3 mx-2.5 px-3 h-[40px] cursor-pointer text-[14px] transition-colors rounded-lg whitespace-nowrap
+                  flex items-center gap-3 mx-2.5 px-3 h-[34px] mb-1 cursor-pointer text-[13px] transition-colors rounded-lg whitespace-nowrap
                   ${isActive(item.key)
                     ? 'bg-[#e8e8e8] font-semibold text-[#1b1f2b]'
                     : 'text-[#3b4055] hover:bg-[#ededed]'

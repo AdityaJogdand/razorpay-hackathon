@@ -79,8 +79,8 @@ class Action(Base):
     failure_event_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("failure_events.id"), nullable=False
     )
-    recovery_plan_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("recovery_plans.id"), nullable=False
+    recovery_plan_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("recovery_plans.id"), nullable=True
     )
     merchant_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
 
