@@ -1,0 +1,42 @@
+import enum
+
+
+class FailureClass(str, enum.Enum):
+    HARD = "HARD"
+    SOFT = "SOFT"
+    MANDATE = "MANDATE"
+    UNKNOWN = "UNKNOWN"
+
+
+class ActionType(str, enum.Enum):
+    RETRY = "RETRY"
+    CONTACT_EMAIL = "CONTACT_EMAIL"
+    REAUTH_REQUEST = "REAUTH_REQUEST"
+    ESCALATE_HUMAN = "ESCALATE_HUMAN"
+
+
+class ActionStatus(str, enum.Enum):
+    SCHEDULED = "SCHEDULED"
+    EXECUTING = "EXECUTING"
+    SUCCEEDED = "SUCCEEDED"
+    FAILED = "FAILED"
+    SUPPRESSED = "SUPPRESSED"
+    UNRESOLVED = "UNRESOLVED"
+
+
+class InstrumentType(str, enum.Enum):
+    CARD = "CARD"
+    UPI = "UPI"
+    EMANDATE = "EMANDATE"
+    NETBANKING = "NETBANKING"
+    WALLET = "WALLET"
+
+
+class LedgerEventType(str, enum.Enum):
+    TRIAGE = "TRIAGE"
+    PLAN_CREATED = "PLAN_CREATED"
+    SUPPRESSION = "SUPPRESSION"
+    ACTION_SCHEDULED = "ACTION_SCHEDULED"
+    ACTION_EXECUTED = "ACTION_EXECUTED"
+    ACTION_OUTCOME = "ACTION_OUTCOME"
+    CONFIG_CHANGE = "CONFIG_CHANGE"

@@ -1,0 +1,38 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+venv/
+.venv/
+*.egg
+
+# Environment
+.env
+
+# Node
+node_modules/
+dist/
+build/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Data (large generated files)
+data/synthetic_dataset.json
+
+# Database
+*.db
+*.sqlite3
+
+# Logs
+*.log
+
+# Claude
+.claude/
