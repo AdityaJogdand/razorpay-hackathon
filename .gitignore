@@ -8,6 +8,8 @@ venv/
 
 # Environment
 .env
+*.csv
+rzp-test-key.csv
 
 # Node
 node_modules/

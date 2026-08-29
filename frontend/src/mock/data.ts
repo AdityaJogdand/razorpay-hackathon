@@ -1,0 +1,393 @@
+export type FailureClass = 'HARD' | 'SOFT' | 'MANDATE' | 'UNKNOWN';
+export type GuardrailStatus = 'approved' | 'overridden';
+export type Outcome = 'recovered' | 'failed' | 'pending' | 'suppressed';
+
+export interface GuardrailCheck {
+  rule: string;
+  passed: boolean;
+  detail?: string;
+}
+
+export interface Transaction {
+  id: string;
+  amount: number;
+  currency: string;
+  customer_id: string;
+  customer_email: string;
+  merchant: string;
+  instrument: string;
+  decline_code: string;
+  decline_reason: string;
+  failure_class: FailureClass;
+  confidence: number;
+  agent_reasoning: string;
+  proposed_action: string;
+  retry_timing?: string;
+  guardrail_status: GuardrailStatus;
+  guardrail_checks: GuardrailCheck[];
+  guardrail_override_reason?: string;
+  outcome: Outcome;
+  outcome_detail: string;
+  email_draft?: {
+    subject: string;
+    body: string;
+    status: 'sent' | 'suppressed';
+    suppression_reason?: string;
+  };
+  failed_at: string;
+  resolved_at?: string;
+}
+
+export interface StoppingRule {
+  id: string;
+  name: string;
+  description: string;
+  times_evaluated: number;
+  times_fired: number;
+  fire_rate: number;
+  example_txn_ids: string[];
+}
+
+export interface BatchStats {
+  total_transactions: number;
+  incremental_recovery: number;
+  ci_lower: number;
+  ci_upper: number;
+  baseline_recovery_rate: number;
+  agent_recovery_rate: number;
+  attempts_saved: number;
+  contacts_suppressed: number;
+  agreement_rate: number;
+  baseline_attempts_per_recovery: number;
+  agent_attempts_per_recovery: number;
+  baseline_contacts: number;
+  agent_contacts: number;
+  avg_time_to_recovery_agent: string;
+  avg_time_to_recovery_baseline: string;
+  ope_method: string;
+}
+
+export const MOCK_BATCH_STATS: BatchStats = {
+  total_transactions: 2000,
+  incremental_recovery: 1247500,
+  ci_lower: 1082000,
+  ci_upper: 1413000,
+  baseline_recovery_rate: 21.8,
+  agent_recovery_rate: 34.2,
+  attempts_saved: 847,
+  contacts_suppressed: 175,
+  agreement_rate: 91.3,
+  baseline_attempts_per_recovery: 3.1,
+  agent_attempts_per_recovery: 1.7,
+  baseline_contacts: 487,
+  agent_contacts: 312,
+  avg_time_to_recovery_agent: '18h',
+  avg_time_to_recovery_baseline: '42h',
+  ope_method: 'Doubly Robust',
+};
+
+export const MOCK_TRANSACTIONS: Transaction[] = [
+  {
+    id: 'TXN-4819',
+    amount: 820000,
+    currency: 'INR',
+    customer_id: 'CUS-1042',
+    customer_email: 'r***a@gmail.com',
+    merchant: 'CloudHostIndia',
+    instrument: 'Visa *4821',
+    decline_code: 'CARD_EXPIRED',
+    decline_reason: 'Card has expired (code 54)',
+    failure_class: 'HARD',
+    confidence: 0.94,
+    agent_reasoning:
+      'This transaction failed with response code 14 (CARD_EXPIRED). The card expiry date 03/2026 has passed. No updated card-on-file exists. The customer has been subscribed for 14 months with 0 prior failures, indicating a loyal customer who likely wants to continue service. I recommend against retry since the instrument is permanently dead. Instead, send a re-authorization email explaining the situation and providing a link to update payment details.',
+    proposed_action: 'Email contact (no retry)',
+    guardrail_status: 'overridden',
+    guardrail_checks: [
+      { rule: 'Hard decline: no retry', passed: true },
+      { rule: 'Contact frequency cap', passed: false, detail: 'Customer contacted <24h ago. Agent proposed email, guardrail suppressed: cooldown period active.' },
+      { rule: 'Opt-out check', passed: true },
+      { rule: 'Kill switch', passed: true },
+    ],
+    guardrail_override_reason: 'Contact frequency cap violated. Email suppressed, customer was contacted less than 24 hours ago.',
+    outcome: 'pending',
+    outcome_detail: 'Awaiting next contact window',
+    email_draft: {
+      subject: 'Quick update on your payment to CloudHostIndia',
+      body: 'Hi there,\n\nWe noticed your recent payment of ₹8,200 to CloudHostIndia could not be processed because your card ending in 4821 has expired.\n\nTo continue your service without interruption, please update your payment method:\n\n→ Update Payment Method\n\nIf you have already updated your card, you can ignore this email. Your next payment will be retried automatically.\n\nBest regards,\nCloudHostIndia Billing Team',
+      status: 'suppressed',
+      suppression_reason: 'Contact frequency cap: customer contacted within 24h cooldown window',
+    },
+    failed_at: '2026-08-29T09:14:00Z',
+  },
+  {
+    id: 'TXN-4821',
+    amount: 420000,
+    currency: 'INR',
+    customer_id: 'CUS-0887',
+    customer_email: 's***n@outlook.com',
+    merchant: 'FitnessPro',
+    instrument: 'UPI HDFC',
+    decline_code: 'INSUFFICIENT_FUNDS',
+    decline_reason: 'Insufficient funds in account (code U30)',
+    failure_class: 'SOFT',
+    confidence: 0.97,
+    agent_reasoning:
+      'Soft decline with code U30 indicating temporary insufficient funds. The customer has a strong payment history — 11 successful payments in the last 12 months with only 1 prior soft failure that resolved on retry. Historical data shows 73% success rate for this decline code when retried after 4 hours. I recommend a delayed retry at the 4-hour mark, then 24-hour if first retry fails, then 48-hour final attempt. No customer contact needed — this will likely resolve on its own.',
+    proposed_action: 'Retry in 4h, 24h, 48h',
+    retry_timing: '4h → 24h → 48h',
+    guardrail_status: 'approved',
+    guardrail_checks: [
+      { rule: 'Max retry count (3)', passed: true },
+      { rule: 'Retry window (72h)', passed: true },
+      { rule: 'Soft decline: retry allowed', passed: true },
+      { rule: 'Kill switch', passed: true },
+    ],
+    outcome: 'recovered',
+    outcome_detail: 'Payment recovered on 1st retry (₹4,200)',
+    failed_at: '2026-08-29T08:32:00Z',
+    resolved_at: '2026-08-29T12:35:00Z',
+  },
+  {
+    id: 'TXN-4817',
+    amount: 4500000,
+    currency: 'INR',
+    customer_id: 'CUS-0234',
+    customer_email: 'p***k@company.co',
+    merchant: 'SaaSMetrics',
+    instrument: 'NACH Mandate',
+    decline_code: 'MANDATE_REVOKED',
+    decline_reason: 'e-NACH mandate cancelled by customer bank',
+    failure_class: 'MANDATE',
+    confidence: 0.91,
+    agent_reasoning:
+      'The e-NACH mandate has been revoked by the customer bank. This is not a transient failure — the payment instrument itself is no longer authorized. The customer is a high-value enterprise client (₹45,000/mo) with 18 months of history and zero prior failures. This mandate revocation may be unintentional (bank-side cleanup). I strongly recommend immediate customer outreach explaining the situation and providing clear re-authorization steps. Given the account value, this should be prioritized.',
+    proposed_action: 'Email contact (priority: high)',
+    guardrail_status: 'approved',
+    guardrail_checks: [
+      { rule: 'Mandate: no retry', passed: true },
+      { rule: 'Contact frequency cap', passed: true },
+      { rule: 'Opt-out check', passed: true },
+      { rule: 'Kill switch', passed: true },
+    ],
+    outcome: 'recovered',
+    outcome_detail: 'Customer re-authorized mandate, payment collected',
+    email_draft: {
+      subject: 'Action needed: Your SaaSMetrics subscription payment',
+      body: 'Hi there,\n\nYour recurring payment of ₹45,000 to SaaSMetrics was not processed because your e-NACH mandate has been deactivated.\n\nThis sometimes happens due to routine bank maintenance. To restore your subscription:\n\n1. Log in to your SaaSMetrics dashboard\n2. Go to Billing → Payment Methods\n3. Click "Re-authorize Mandate"\n\nThe process takes about 2 minutes. If you need assistance, reply to this email.\n\nBest regards,\nSaaSMetrics Billing',
+      status: 'sent',
+    },
+    failed_at: '2026-08-29T07:15:00Z',
+    resolved_at: '2026-08-29T16:42:00Z',
+  },
+  {
+    id: 'TXN-4815',
+    amount: 2200000,
+    currency: 'INR',
+    customer_id: 'CUS-1201',
+    customer_email: 'a***g@gmail.com',
+    merchant: 'EduLearn',
+    instrument: 'RuPay *9912',
+    decline_code: 'UNKNOWN_X42',
+    decline_reason: 'Undocumented gateway response (code X42)',
+    failure_class: 'UNKNOWN',
+    confidence: 0.42,
+    agent_reasoning:
+      'Response code X42 is not documented in our decline taxonomy. Gateway returned an ambiguous response. Looking at historical patterns: this merchant has seen code X42 three times before — twice it resolved on retry (suggesting soft), once the card was later found to be blocked (suggesting hard). The customer has a mixed history with 8 successes and 3 failures. Given the ambiguity, I cannot confidently classify this. My best guess is SOFT (55% confidence) but I recommend routing to human review before taking action.',
+    proposed_action: 'Escalate to human review',
+    guardrail_status: 'approved',
+    guardrail_checks: [
+      { rule: 'UNKNOWN: route to human queue', passed: true },
+      { rule: 'No automated action on low confidence', passed: true },
+      { rule: 'Kill switch', passed: true },
+    ],
+    outcome: 'pending',
+    outcome_detail: 'Awaiting human review',
+    failed_at: '2026-08-29T06:48:00Z',
+  },
+  {
+    id: 'TXN-4812',
+    amount: 149900,
+    currency: 'INR',
+    customer_id: 'CUS-0553',
+    customer_email: 'm***i@yahoo.com',
+    merchant: 'StreamBox',
+    instrument: 'Mastercard *3301',
+    decline_code: 'DO_NOT_HONOR',
+    decline_reason: 'Issuer declined without specific reason (code 05)',
+    failure_class: 'SOFT',
+    confidence: 0.78,
+    agent_reasoning:
+      'Code 05 (Do Not Honor) is the most ambiguous decline code — it can mean anything from temporary holds to fraud flags. However, this customer has 5 consecutive successful payments on this card with no prior declines. The amount is small (₹1,499). Statistical analysis suggests 61% of DNH declines for this profile resolve within 24h. I recommend retry at 6h and 24h intervals, but cap at 2 attempts given the ambiguity. No contact needed for this amount.',
+    proposed_action: 'Retry in 6h, 24h (capped at 2)',
+    retry_timing: '6h → 24h',
+    guardrail_status: 'approved',
+    guardrail_checks: [
+      { rule: 'Max retry count (3)', passed: true },
+      { rule: 'Retry window (72h)', passed: true },
+      { rule: 'Confidence threshold', passed: true },
+      { rule: 'Kill switch', passed: true },
+    ],
+    outcome: 'recovered',
+    outcome_detail: 'Payment recovered on 2nd retry (₹1,499)',
+    failed_at: '2026-08-29T05:20:00Z',
+    resolved_at: '2026-08-30T05:22:00Z',
+  },
+  {
+    id: 'TXN-4808',
+    amount: 999900,
+    currency: 'INR',
+    customer_id: 'CUS-0091',
+    customer_email: 'v***a@gmail.com',
+    merchant: 'DesignStudio',
+    instrument: 'Visa *7744',
+    decline_code: 'CARD_STOLEN',
+    decline_reason: 'Card reported as lost or stolen (code 43)',
+    failure_class: 'HARD',
+    confidence: 0.99,
+    agent_reasoning:
+      'Code 43 indicates the card has been reported lost or stolen. This is a definitive hard decline — the instrument is permanently dead and must never be retried. Retrying a stolen card could trigger fraud alerts on the merchant account. The customer needs to update their payment method with a new card. I recommend a carefully worded email that avoids mentioning "stolen" (the customer may not want that disclosed) and simply asks them to update their payment details.',
+    proposed_action: 'Email contact (no retry)',
+    guardrail_status: 'approved',
+    guardrail_checks: [
+      { rule: 'Hard decline: no retry', passed: true },
+      { rule: 'Contact frequency cap', passed: true },
+      { rule: 'Opt-out check', passed: true },
+      { rule: 'Kill switch', passed: true },
+    ],
+    outcome: 'pending',
+    outcome_detail: 'Email sent, awaiting customer action',
+    email_draft: {
+      subject: 'Update your payment method for DesignStudio',
+      body: 'Hi there,\n\nYour recent payment of ₹9,999 to DesignStudio could not be processed with your card ending in 7744.\n\nTo continue your subscription, please add a new payment method:\n\n→ Update Payment Method\n\nIf you have any questions, reply to this email and we will be happy to assist.\n\nBest regards,\nDesignStudio Billing',
+      status: 'sent',
+    },
+    failed_at: '2026-08-29T04:10:00Z',
+  },
+  {
+    id: 'TXN-4805',
+    amount: 350000,
+    currency: 'INR',
+    customer_id: 'CUS-0672',
+    customer_email: 'k***r@gmail.com',
+    merchant: 'MealKit',
+    instrument: 'UPI ICICI',
+    decline_code: 'UPI_TIMEOUT',
+    decline_reason: 'UPI transaction timed out (code U78)',
+    failure_class: 'SOFT',
+    confidence: 0.92,
+    agent_reasoning:
+      'UPI timeout (U78) is a classic transient failure — the payment infrastructure was temporarily unavailable. These resolve on retry 85% of the time. The customer is active with 6 recent successful UPI payments. I recommend an immediate retry (within 30 minutes) since timeouts often clear quickly, followed by a 4h retry if needed. No customer contact necessary.',
+    proposed_action: 'Retry in 30min, 4h',
+    retry_timing: '30min → 4h',
+    guardrail_status: 'approved',
+    guardrail_checks: [
+      { rule: 'Max retry count (3)', passed: true },
+      { rule: 'Retry window (72h)', passed: true },
+      { rule: 'Soft decline: retry allowed', passed: true },
+      { rule: 'Kill switch', passed: true },
+    ],
+    outcome: 'recovered',
+    outcome_detail: 'Payment recovered on 1st retry (₹3,500)',
+    failed_at: '2026-08-29T03:45:00Z',
+    resolved_at: '2026-08-29T04:16:00Z',
+  },
+  {
+    id: 'TXN-4801',
+    amount: 1899900,
+    currency: 'INR',
+    customer_id: 'CUS-0445',
+    customer_email: 'd***s@business.co',
+    merchant: 'CloudSync',
+    instrument: 'Visa *2210',
+    decline_code: 'RESTRICTED_CARD',
+    decline_reason: 'Card restricted by issuer (code 62)',
+    failure_class: 'HARD',
+    confidence: 0.88,
+    agent_reasoning:
+      'Code 62 indicates the card is restricted — possibly due to geographic restrictions, transaction type limits, or issuer policy. While sometimes temporary, the restriction code typically indicates issuer-level blocking that won\'t resolve on retry. The customer is a B2B client with a high-value subscription (₹18,999/mo). I initially considered recommending a retry since some restrictions are temporary, but the code strongly correlates with permanent blocks in our data. Recommend customer outreach to update payment method.',
+    proposed_action: 'Retry once, then email',
+    guardrail_status: 'overridden',
+    guardrail_checks: [
+      { rule: 'Hard decline: no retry', passed: false, detail: 'Agent proposed retry for HARD decline. Guardrail blocked: hard declines must never be retried regardless of reasoning.' },
+      { rule: 'Contact frequency cap', passed: true },
+      { rule: 'Opt-out check', passed: true },
+      { rule: 'Kill switch', passed: true },
+    ],
+    guardrail_override_reason: 'Agent proposed retry on HARD decline (RESTRICTED_CARD). Guardrail enforced no-retry policy. Action changed to email-only.',
+    outcome: 'pending',
+    outcome_detail: 'Email sent, awaiting customer response',
+    email_draft: {
+      subject: 'Payment update needed for CloudSync',
+      body: 'Hi there,\n\nYour payment of ₹18,999 for CloudSync could not be processed with your current card ending in 2210.\n\nThis appears to be a restriction on your card. Please update your payment method to avoid service interruption:\n\n→ Update Payment Method\n\nIf you believe this is an error, please contact your card issuer.\n\nBest regards,\nCloudSync Billing',
+      status: 'sent',
+    },
+    failed_at: '2026-08-29T02:30:00Z',
+  },
+];
+
+export const MOCK_STOPPING_RULES: StoppingRule[] = [
+  {
+    id: 'G1',
+    name: 'Hard decline: no retry',
+    description: 'Permanently dead instruments must never be retried',
+    times_evaluated: 612,
+    times_fired: 594,
+    fire_rate: 97.1,
+    example_txn_ids: ['TXN-4819', 'TXN-4808', 'TXN-4801'],
+  },
+  {
+    id: 'G2',
+    name: 'Max retry count (3)',
+    description: 'No more than 3 retry attempts per transaction',
+    times_evaluated: 1840,
+    times_fired: 12,
+    fire_rate: 0.7,
+    example_txn_ids: [],
+  },
+  {
+    id: 'G3',
+    name: 'Contact cooldown (24h)',
+    description: 'Minimum 24 hours between customer contacts',
+    times_evaluated: 1200,
+    times_fired: 89,
+    fire_rate: 7.4,
+    example_txn_ids: ['TXN-4819'],
+  },
+  {
+    id: 'G4',
+    name: 'Customer opt-out',
+    description: 'Never contact customers who have opted out',
+    times_evaluated: 1200,
+    times_fired: 34,
+    fire_rate: 2.8,
+    example_txn_ids: [],
+  },
+  {
+    id: 'G5',
+    name: 'Retry window (72h)',
+    description: 'All retries must complete within 72 hours of failure',
+    times_evaluated: 1840,
+    times_fired: 7,
+    fire_rate: 0.4,
+    example_txn_ids: [],
+  },
+  {
+    id: 'G6',
+    name: 'UNKNOWN: escalate only',
+    description: 'Low-confidence classifications must route to human review',
+    times_evaluated: 300,
+    times_fired: 300,
+    fire_rate: 100,
+    example_txn_ids: ['TXN-4815'],
+  },
+  {
+    id: 'G7',
+    name: 'Kill switch check',
+    description: 'Halt all execution when kill switch is active',
+    times_evaluated: 2000,
+    times_fired: 0,
+    fire_rate: 0,
+    example_txn_ids: [],
+  },
+];
