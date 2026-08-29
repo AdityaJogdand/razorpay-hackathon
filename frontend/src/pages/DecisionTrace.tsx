@@ -1,5 +1,6 @@
-import { useState } from 'react';
-import { Table, Drawer, Tooltip, Timeline } from 'antd';
+import { useState, useEffect, useRef } from 'react';
+import { useNavigate } from 'react-router-dom';
+import { Table, Drawer, Tooltip, Timeline, Spin, Empty, Alert } from 'antd';
 import {
   InfoCircleOutlined,
   RightOutlined,
@@ -13,7 +14,8 @@ import {
   ExclamationCircleOutlined,
   StopOutlined,
 } from '@ant-design/icons';
-import { MOCK_TRANSACTIONS, type Transaction, type FailureClass } from '../mock/data';
+import type { Transaction, FailureClass } from '../types/transaction';
+import { fetchDashboardEvents, fetchDashboardSummary, type DashboardEvent, type DashboardSummary } from '../api/dashboard';
 
 const CLASS_BORDER: Record<FailureClass, string> = {
   HARD: '#1b1f2b',
@@ -21,6 +23,53 @@ const CLASS_BORDER: Record<FailureClass, string> = {
   MANDATE: '#528FF0',
   UNKNOWN: '#d1d5db',
 };
+
+function apiEventToTransaction(e: DashboardEvent): Transaction {
+  const actionStr = e.guardrail.final_action || e.agent.proposed_action || 'Unknown';
+  const retrySchedule = e.agent.retry_schedule;
+  let retryTiming: string | undefined;
+  if (retrySchedule && retrySchedule.length > 0) {
+    retryTiming = retrySchedule.map((h) => (h < 1 ? `${Math.round(h * 60)}min` : `${h}h`)).join(' → ');
+  }
+
+  return {
+    id: e.transaction_id || e.id.slice(0, 12),
+    amount: e.amount_paise,
+    currency: e.currency,
+    customer_id: e.customer_id,
+    customer_email: e.customer_email,
+    merchant: e.merchant_id,
+    instrument: `${e.instrument_type} ${e.instrument_token.slice(-4)}`,
+    decline_code: e.decline_code,
+    decline_reason: e.decline_reason,
+    failure_class: e.failure_class as FailureClass,
+    confidence: e.classification_confidence,
+    agent_reasoning: e.agent.reasoning || 'No reasoning available',
+    proposed_action: formatAction(actionStr),
+    retry_timing: retryTiming,
+    guardrail_status: e.guardrail.status as 'approved' | 'overridden',
+    guardrail_checks: (e.guardrail.checks || []).map((c) => ({
+      rule: c.rule,
+      passed: c.passed,
+      detail: c.detail,
+    })),
+    guardrail_override_reason: e.guardrail.override_reason || undefined,
+    outcome: e.outcome as Transaction['outcome'],
+    outcome_detail: e.outcome_detail,
+    failed_at: e.failed_at,
+    resolved_at: e.actions.find((a) => a.status === 'SUCCEEDED')?.executed_at || undefined,
+  };
+}
+
+function formatAction(action: string): string {
+  const map: Record<string, string> = {
+    RETRY: 'Retry',
+    CONTACT_EMAIL: 'Email contact',
+    REAUTH_REQUEST: 'Re-auth request',
+    ESCALATE_HUMAN: 'Escalate to human',
+  };
+  return map[action] || action;
+}
 
 const ACTION_ICON: Record<string, React.ReactNode> = {
   retry: <ReloadOutlined className="text-[11px]" />,
@@ -37,25 +86,83 @@ function getActionType(action: string): string {
   return 'suppress';
 }
 
-// Strip the parenthetical code from decline_reason for cleaner display
 function humanReason(reason: string): string {
   return reason.replace(/\s*\(code\s+\S+\)\s*$/, '');
 }
 
-// Summary data
-const recoveredAmount = MOCK_TRANSACTIONS
-  .filter((t) => t.outcome === 'recovered')
-  .reduce((sum, t) => sum + t.amount, 0);
-
-const suppressedCount = MOCK_TRANSACTIONS.filter(
-  (t) => t.guardrail_status === 'overridden' || t.outcome === 'suppressed'
-).length;
-
-const pendingCount = MOCK_TRANSACTIONS.filter((t) => t.outcome === 'pending').length;
-const failedCount = MOCK_TRANSACTIONS.filter((t) => t.failure_class === 'UNKNOWN').length;
-
 export default function DecisionTrace() {
+  const navigate = useNavigate();
   const [drawerTxn, setDrawerTxn] = useState<Transaction | null>(null);
+  const [transactions, setTransactions] = useState<Transaction[]>([]);
+  const [summary, setSummary] = useState<DashboardSummary | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const wsRef = useRef<WebSocket | null>(null);
+
+  const loadData = async () => {
+    try {
+      const [eventsRes, summaryRes] = await Promise.all([
+        fetchDashboardEvents({ limit: 50 }),
+        fetchDashboardSummary(),
+      ]);
+      setTransactions(eventsRes.events.map(apiEventToTransaction));
+      setSummary(summaryRes);
+      setError(null);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to connect to backend');
+    }
+  };
+
+  useEffect(() => {
+    let cancelled = false;
+    loadData().finally(() => { if (!cancelled) setLoading(false); });
+
+    // WebSocket for live updates
+    function connectWs() {
+      const wsUrl = (import.meta.env.VITE_API_URL || 'http://localhost:8000').replace(/^http/, 'ws') + '/ws/dashboard';
+      const ws = new WebSocket(wsUrl);
+      wsRef.current = ws;
+
+      ws.onmessage = () => {
+        // Any message = data changed, refresh
+        loadData();
+      };
+
+      ws.onclose = () => {
+        // Reconnect after 3s
+        if (!cancelled) setTimeout(connectWs, 3000);
+      };
+
+      ws.onerror = () => ws.close();
+    }
+
+    connectWs();
+
+    return () => {
+      cancelled = true;
+      wsRef.current?.close();
+    };
+  }, []);
+
+  const recoveredAmount = summary
+    ? summary.recovered_amount_paise
+    : transactions.filter((t) => t.outcome === 'recovered').reduce((sum, t) => sum + t.amount, 0);
+
+  const suppressedCount = summary
+    ? summary.override_count
+    : transactions.filter((t) => t.guardrail_status === 'overridden' || t.outcome === 'suppressed').length;
+
+  const pendingCount = summary
+    ? summary.pending_count
+    : transactions.filter((t) => t.outcome === 'pending').length;
+
+  const failedCount = summary
+    ? summary.exception_count
+    : transactions.filter((t) => t.failure_class === 'UNKNOWN').length;
+
+  const recoveredCount = summary
+    ? summary.recovered_count
+    : transactions.filter((t) => t.outcome === 'recovered').length;
 
   const columns = [
     {
@@ -163,6 +270,27 @@ export default function DecisionTrace() {
     },
   ];
 
+  if (loading) {
+    return (
+      <div className="flex items-center justify-center py-20">
+        <Spin size="large" />
+      </div>
+    );
+  }
+
+  if (error) {
+    return (
+      <div className="py-10">
+        <Alert
+          type="error"
+          message="Backend Unavailable"
+          description={`Could not fetch data: ${error}. Make sure the backend is running on http://localhost:8000`}
+          showIcon
+        />
+      </div>
+    );
+  }
+
   return (
     <div>
       {/* Page Header */}
@@ -193,13 +321,16 @@ export default function DecisionTrace() {
           </span>
         </div>
         <div className="text-[13px] text-[#7b8294]">
-          from {MOCK_TRANSACTIONS.filter((t) => t.outcome === 'recovered').length} recovered payments
+          from {recoveredCount} recovered payments
         </div>
       </div>
 
       {/* ========== THREE SUMMARY CARDS ========== */}
       <div className="grid grid-cols-3 gap-4 mb-6">
-        <div className="bg-white rounded-lg border border-[#e5e8ec] p-5 cursor-pointer hover:shadow-sm transition-shadow">
+        <div
+          onClick={() => navigate('/rules')}
+          className="bg-white rounded-lg border border-[#e5e8ec] p-5 cursor-pointer hover:shadow-sm hover:border-[#d0d5dd] transition-all active:scale-[0.99]"
+        >
           <div className="flex items-center justify-between mb-4">
             <div className="flex items-center gap-2">
               <WarningFilled className="text-[#d97706] text-[14px]" />
@@ -216,7 +347,10 @@ export default function DecisionTrace() {
           <div className="text-[13px] text-[#7b8294]">overridden decisions</div>
         </div>
 
-        <div className="bg-white rounded-lg border border-[#e5e8ec] p-5 cursor-pointer hover:shadow-sm transition-shadow">
+        <div
+          onClick={() => navigate('/trace')}
+          className="bg-white rounded-lg border border-[#e5e8ec] p-5 cursor-pointer hover:shadow-sm hover:border-[#d0d5dd] transition-all active:scale-[0.99]"
+        >
           <div className="flex items-center justify-between mb-4">
             <div className="flex items-center gap-2">
               <ClockCircleOutlined className="text-[#528FF0] text-[14px]" />
@@ -233,7 +367,10 @@ export default function DecisionTrace() {
           <div className="text-[13px] text-[#7b8294]">awaiting action</div>
         </div>
 
-        <div className="bg-white rounded-lg border border-[#e5e8ec] p-5 cursor-pointer hover:shadow-sm transition-shadow">
+        <div
+          onClick={() => navigate('/exceptions')}
+          className="bg-white rounded-lg border border-[#e5e8ec] p-5 cursor-pointer hover:shadow-sm hover:border-[#d0d5dd] transition-all active:scale-[0.99]"
+        >
           <div className="flex items-center justify-between mb-4">
             <div className="flex items-center gap-2">
               <CloseCircleFilled className="text-[#dc2626] text-[14px]" />
@@ -263,21 +400,25 @@ export default function DecisionTrace() {
         </div>
       </div>
 
-      <Table
-        dataSource={MOCK_TRANSACTIONS}
-        columns={columns}
-        rowKey="id"
-        pagination={false}
-        size="small"
-        onRow={(record) => ({
-          onClick: () => setDrawerTxn(record),
-          className: `cursor-pointer transition-colors hover:bg-[#fafafa] ${
-            record.guardrail_status === 'overridden' ? '!bg-[#fefcf7] hover:!bg-[#fdf8ed]' : ''
-          }`,
-        })}
-        style={{ fontSize: 13 }}
-        className="decisions-table"
-      />
+      {transactions.length === 0 ? (
+        <Empty description="No failure events found. Ingest some data via POST /ingest/webhook" />
+      ) : (
+        <Table
+          dataSource={transactions}
+          columns={columns}
+          rowKey="id"
+          pagination={false}
+          size="small"
+          onRow={(record) => ({
+            onClick: () => setDrawerTxn(record),
+            className: `cursor-pointer transition-colors hover:bg-[#fafafa] ${
+              record.guardrail_status === 'overridden' ? '!bg-[#fefcf7] hover:!bg-[#fdf8ed]' : ''
+            }`,
+          })}
+          style={{ fontSize: 13 }}
+          className="decisions-table"
+        />
+      )}
 
       {/* ========== DETAIL DRAWER ========== */}
       <Drawer
@@ -300,7 +441,7 @@ function TransactionDetail({ txn, onClose }: { txn: Transaction; onClose: () => 
 
   return (
     <div>
-      {/* ── Header ── */}
+      {/* Header */}
       <div className="px-6 pt-6 pb-5 border-b border-[#f0f0f0]">
         <div className="flex items-center justify-between mb-4">
           <span className="font-mono text-[14px] font-semibold text-[#1b1f2b]">{txn.id}</span>
@@ -328,7 +469,7 @@ function TransactionDetail({ txn, onClose }: { txn: Transaction; onClose: () => 
         </div>
       </div>
 
-      {/* ── Failure reason ── */}
+      {/* Failure reason */}
       <div className="px-6 py-4 border-b border-[#f0f0f0]">
         <div className="text-[11px] font-semibold text-[#9ca3af] uppercase tracking-wider mb-2">Failure</div>
         <div
@@ -340,7 +481,7 @@ function TransactionDetail({ txn, onClose }: { txn: Transaction; onClose: () => 
         </div>
       </div>
 
-      {/* ── Agent recommendation ── */}
+      {/* Agent recommendation */}
       <div className="px-6 py-4 border-b border-[#f0f0f0]">
         <div className="text-[11px] font-semibold text-[#9ca3af] uppercase tracking-wider mb-2">Recommendation</div>
 
@@ -357,7 +498,7 @@ function TransactionDetail({ txn, onClose }: { txn: Transaction; onClose: () => 
         </div>
       </div>
 
-      {/* ── Guardrail ── */}
+      {/* Guardrail */}
       <div className="px-6 py-4 border-b border-[#f0f0f0]">
         <div className="text-[11px] font-semibold text-[#9ca3af] uppercase tracking-wider mb-2">Guardrail</div>
 
@@ -405,7 +546,7 @@ function TransactionDetail({ txn, onClose }: { txn: Transaction; onClose: () => 
         )}
       </div>
 
-      {/* ── Timeline ── */}
+      {/* Timeline */}
       <div className="px-6 py-4 border-b border-[#f0f0f0]">
         <div className="text-[11px] font-semibold text-[#9ca3af] uppercase tracking-wider mb-3">Timeline</div>
         <Timeline
@@ -442,7 +583,7 @@ function TransactionDetail({ txn, onClose }: { txn: Transaction; onClose: () => 
         />
       </div>
 
-      {/* ── Email preview ── */}
+      {/* Email preview */}
       {txn.email_draft && (
         <div className="px-6 py-4">
           <div className="text-[11px] font-semibold text-[#9ca3af] uppercase tracking-wider mb-2 flex items-center gap-2">

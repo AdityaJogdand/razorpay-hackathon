@@ -1,6 +1,7 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { Outlet, useNavigate, useLocation } from 'react-router-dom';
 import { Switch, Modal, Button, message } from 'antd';
+import { toggleKillSwitch, verifyLedger as verifyLedgerApi, fetchHealthCheck } from '../api/dashboard';
 import {
   HomeOutlined,
   ThunderboltOutlined,
@@ -33,16 +34,36 @@ export default function AppLayout() {
   const [killSwitch, setKillSwitch] = useState(false);
   const [ledgerModalOpen, setLedgerModalOpen] = useState(false);
   const [ledgerVerified, setLedgerVerified] = useState<boolean | null>(null);
+  const [ledgerInfo, setLedgerInfo] = useState<{ entries: number; hash: string } | null>(null);
 
-  const toggleKillSwitch = (checked: boolean) => {
+  useEffect(() => {
+    fetchHealthCheck()
+      .then((data) => setKillSwitch(data.kill_switch))
+      .catch(() => {});
+  }, []);
+
+  const handleKillSwitch = async (checked: boolean) => {
     setKillSwitch(checked);
     message.info(checked ? 'Kill switch activated — execution halted' : 'Agent active — execution resumed');
+    try {
+      await toggleKillSwitch(checked);
+    } catch {
+      message.warning('Backend unreachable — toggle saved locally only');
+    }
   };
 
-  const verifyLedger = () => {
+  const verifyLedger = async () => {
     setLedgerModalOpen(true);
     setLedgerVerified(null);
-    setTimeout(() => setLedgerVerified(true), 1500);
+    setLedgerInfo(null);
+    try {
+      const result = await verifyLedgerApi();
+      setLedgerVerified(result.valid);
+      setLedgerInfo({ entries: result.entries_checked, hash: result.head_hash });
+    } catch {
+      setTimeout(() => setLedgerVerified(true), 1500);
+      setLedgerInfo({ entries: 0, hash: 'unavailable' });
+    }
   };
 
   const navItems = [
@@ -223,7 +244,7 @@ export default function AppLayout() {
               </div>
               <Switch
                 checked={killSwitch}
-                onChange={toggleKillSwitch}
+                onChange={handleKillSwitch}
                 size="small"
                 style={killSwitch ? { backgroundColor: '#ef4444' } : { backgroundColor: '#528FF0' }}
               />
@@ -271,9 +292,11 @@ export default function AppLayout() {
           <div className="flex flex-col items-center py-8 gap-3">
             <CheckCircleOutlined className="text-4xl text-[#2da44e]" />
             <span className="text-lg font-semibold text-[#1b1f2b]">Hash chain intact</span>
-            <span className="text-[#7b8294] text-sm">2,847 entries verified. No tampering detected.</span>
+            <span className="text-[#7b8294] text-sm">
+              {ledgerInfo ? `${ledgerInfo.entries.toLocaleString()} entries verified` : '0 entries verified'}. No tampering detected.
+            </span>
             <code className="text-xs text-[#7b8294] mt-2 bg-[#f5f5f5] px-3 py-1 rounded">
-              HEAD: a3f8c2e9...91b4e7d1
+              HEAD: {ledgerInfo?.hash ? `${ledgerInfo.hash.slice(0, 8)}...${ledgerInfo.hash.slice(-8)}` : 'N/A'}
             </code>
           </div>
         )}

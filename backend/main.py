@@ -1,6 +1,6 @@
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI
+from fastapi import FastAPI, WebSocket
 from fastapi.middleware.cors import CORSMiddleware
 
 from backend.core.config import settings
@@ -10,6 +10,8 @@ from backend.ledger.router import router as ledger_router
 from backend.config.router import router as config_router
 from backend.agent.router import router as agent_router
 from backend.execution.router import router as execution_router
+from backend.dashboard.router import router as dashboard_router
+from backend.dashboard.ws import dashboard_ws
 
 
 @asynccontextmanager
@@ -37,6 +39,12 @@ app.include_router(ledger_router)
 app.include_router(config_router)
 app.include_router(agent_router)
 app.include_router(execution_router)
+app.include_router(dashboard_router)
+
+
+@app.websocket("/ws/dashboard")
+async def ws_dashboard(ws: WebSocket):
+    await dashboard_ws(ws)
 
 
 @app.get("/health")

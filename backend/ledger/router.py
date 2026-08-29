@@ -17,7 +17,20 @@ async def verify_ledger_integrity(
     db: AsyncSession = Depends(get_db),
 ):
     """Walk the hash chain and verify integrity."""
+    from backend.models.tables import AuditLedger
+    from sqlalchemy import select as sa_select
+
     result = await verify_chain(db, merchant_id)
+
+    # Get head hash for display
+    head_result = await db.execute(
+        sa_select(AuditLedger.entry_hash)
+        .where(AuditLedger.merchant_id == merchant_id)
+        .order_by(AuditLedger.id.desc())
+        .limit(1)
+    )
+    head_hash = head_result.scalar_one_or_none() or "0" * 64
+    result["head_hash"] = head_hash
     return result
 
 

@@ -6,6 +6,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from backend.core.database import get_db
 from backend.ingest.schemas import WebhookPayload, IngestResponse
 from backend.ingest.service import process_webhook, verify_hmac
+from backend.dashboard.ws import notify_dashboard_update
 
 router = APIRouter(prefix="/ingest", tags=["ingest"])
 
@@ -24,6 +25,8 @@ async def ingest_webhook(
 
     if result["message"] == "duplicate":
         raise HTTPException(status_code=409, detail="Duplicate gateway event")
+
+    await notify_dashboard_update("ingest")
 
     return IngestResponse(
         event_id=result["event_id"],

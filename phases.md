@@ -27,45 +27,51 @@
 
 ---
 
-## Phase 3: AI Agent + Execution (Day 6-8) [NEXT]
+## Phase 3: AI Agent + Execution (Day 6-8) [DONE]
 **Goal:** LLM agent reasons about each failure, guardrails validate, execution runs.
 
 ### 3a. AI Recovery Agent
-- [ ] Agent prompt engineering: system prompt with taxonomy context,
-      customer context injection, structured JSON output with reasoning field
-- [ ] Agent service: takes failure event + customer context -> returns
-      structured RecoveryPlan with natural-language reasoning
-- [ ] Agent email drafting: personalized re-auth emails for HARD/MANDATE
-- [ ] Agent caching: cache by context hash for batch evaluation
-- [ ] Fallback: if agent is unavailable/slow, fall back to rules-only engine
+- [x] Agent prompt engineering: system prompt with taxonomy context,
+      guardrail rules listed, action selection guide, structured JSON output
+- [x] Agent service: takes failure event + customer context -> returns
+      AgentProposal with natural-language reasoning
+- [x] Agent email drafting: personalized re-auth emails for HARD/MANDATE
+- [x] Hybrid approach: LLM provides reasoning/emails/confidence, deterministic
+      action selector maps failure_class -> action type (fixes Llama 3.2 inconsistency)
+- [x] Fallback: if agent is unavailable/slow, fall back to rules-only engine
 
 ### 3b. Guardrail Engine
-- [ ] Refactor policy engine into guardrail validator:
-      takes agent-proposed plan, validates against stopping rules,
-      overrides unsafe proposals, logs overrides
-- [ ] Agent-guardrail agreement tracking (how often agent proposes safe plans)
+- [x] 9 deterministic guardrail rules (pure function, no I/O):
+      hard_no_retry, mandate_no_retry, max_retry_count, retry_window,
+      contact_frequency_cap, customer_opt_out, no_email_on_file,
+      unknown_must_escalate, kill_switch
+- [x] Override logging: every guardrail correction logged to audit ledger
+- [x] Fallback email generation when guardrail overrides to CONTACT_EMAIL
 
 ### 3c. Execution Layer
-- [ ] F8: Durable execution (persist before execute, idempotency keys)
-- [ ] F8: Simulated gateway (returns outcomes from ground-truth surface)
-- [ ] F8: Timeout handling (unresolved-unknown, reconciliation)
-- [ ] Gmail SMTP for re-auth outreach (plus-addressed variants)
-- [ ] N4: Kill switch (config flag + dashboard toggle, halts execution only)
+- [x] F8: Durable execution (persist before execute, idempotency keys)
+- [x] F8: Mock gateway (~67% success rate, deterministic via MD5 hash)
+- [x] Gmail SMTP for re-auth outreach (with mock fallback)
+- [x] N4: Kill switch checked at both guardrail and execution layers
+- [x] Human escalation queue for UNKNOWN failures
 
-### 3d. Models (supporting signal for agent)
-- [ ] F5: Logistic regression for retry timing — agent uses as input
-- [ ] F6: Single-model uplift estimator — agent uses as input
+### 3d. Bug Fixes
+- [x] LLM action-reasoning mismatch: Llama 3.2 proposed wrong action despite
+      correct reasoning. Fixed with hybrid architecture (deterministic action
+      selection + LLM reasoning/drafts)
+- [x] Prior retry over-counting: policy engine retries were counted as agent
+      retries. Fixed by scoping to recovery_plan_id IS NULL
 
-**Exit criteria:** POST a failure event -> agent reasons about it -> guardrails
+**Exit criteria:** ✅ POST a failure event -> agent reasons about it -> guardrails
 validate -> execution runs -> outcome recorded. Agent reasoning visible in
-audit ledger. Emails sent. Kill switch works. Agent-guardrail override logged
-at least once in test data.
+audit ledger. Kill switch works. Agent-guardrail override logged and verified.
 
 ---
 
-## Phase 4: Measurement (Day 9-10)
-**Goal:** OPE evaluation with defensible numbers.
+## Phase 4: Measurement + Gaps (Day 9-10)
+**Goal:** OPE evaluation with defensible numbers + address backend gaps.
 
+### 4a. OPE Measurement
 - [ ] Stochastic baseline policy (0.85 retry prob, 0.7 contact prob,
       logged propensities)
 - [ ] Run baseline over held-out 800-txn batch, log all propensities
@@ -75,6 +81,19 @@ at least once in test data.
 - [ ] Agent-guardrail agreement rate metric
 - [ ] Measurement report: rupees recovered, wasted attempts eliminated,
       contacts suppressed — each with CIs, vs baseline
+
+### 4b. Backend Gaps (from audit)
+- [ ] Customer context enrichment: tenure_days, past_successes, past_failures
+      are hardcoded placeholders — need real profile lookup from DB
+- [ ] Checkout abandonment: PS mentions it as a revenue-at-risk signal but
+      not implemented (would need separate event type + ingest flow)
+- [ ] Overdue receivables: PS mentions it but not implemented (would need
+      separate event type + ingest flow for invoice/subscription overdue)
+- [ ] Email SMTP: Gmail creds expired, falls back to mock — decide whether
+      to fix credentials or keep mock for demo
+- [ ] Alembic migration: schema changes (AGENT_PROPOSAL, GUARDRAIL_RESULT
+      enum values, nullable recovery_plan_id) applied manually via ALTER —
+      need proper migration file
 
 **Exit criteria:** Can report: "Agent caused Rs X incremental recovery [95% CI]
 vs baseline. Eliminated Z wasted attempts. Suppressed W unnecessary contacts.

@@ -27,6 +27,7 @@ from backend.agent.service import get_agent_proposal
 from backend.guardrail.engine import validate_proposal
 from backend.execution.service import execute_action
 from backend.ledger.service import append as ledger_append
+from backend.dashboard.ws import notify_dashboard_update
 
 logger = logging.getLogger(__name__)
 
@@ -288,6 +289,7 @@ async def process_with_agent(
         })
 
     await db.commit()
+    await notify_dashboard_update("agent_processed")
 
     return {
         "event_id": str(event.id),
