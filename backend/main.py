@@ -12,6 +12,7 @@ from backend.agent.router import router as agent_router
 from backend.execution.router import router as execution_router
 from backend.dashboard.router import router as dashboard_router
 from backend.dashboard.ws import dashboard_ws
+from backend.ope.router import router as ope_router
 
 
 @asynccontextmanager
@@ -40,6 +41,7 @@ app.include_router(config_router)
 app.include_router(agent_router)
 app.include_router(execution_router)
 app.include_router(dashboard_router)
+app.include_router(ope_router)
 
 
 @app.websocket("/ws/dashboard")

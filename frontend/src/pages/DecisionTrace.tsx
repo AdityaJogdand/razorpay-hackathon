@@ -415,13 +415,20 @@ export default function DecisionTrace() {
 
   if (error) {
     return (
-      <div className="py-10">
-        <Alert
-          type="error"
-          message="Backend Unavailable"
-          description={`Could not fetch data: ${error}. Make sure the backend is running on http://localhost:8000`}
-          showIcon
-        />
+      <div className="flex flex-col items-center justify-center" style={{ height: '80vh' }}>
+        <svg width="140" height="120" viewBox="0 0 140 120" fill="none" xmlns="http://www.w3.org/2000/svg">
+          <path fill="#d9d9d9" d="M42.7 10h50.2a2 2 0 0 1 2 2v25a2 2 0 0 1-2 2H42.7a2 2 0 0 1-2-2V12a2 2 0 0 1 2-2m.2 39.8h49.8a2.3 2.3 0 1 1 0 4.5H42.9a2.3 2.3 0 0 1 0-4.5m0 11.7h49.8a2.3 2.3 0 1 1 0 4.6H42.9a2.3 2.3 0 0 1 0-4.6m79 43.5a7 7 0 0 1-6.8 5.4H20.5a7 7 0 0 1-6.7-5.4l-.2-1.8V69.7h26.3c2.9 0 5.2 2.4 5.2 5.4s2.4 5.4 5.3 5.4h34.8c2.9 0 5.3-2.4 5.3-5.4s2.3-5.4 5.2-5.4H122v33.5q0 1-.2 1.8" />
+        </svg>
+        <p className="text-[15px] font-semibold text-[#6b7280] mt-5">Backend Unavailable</p>
+        <p className="text-[13px] text-[#9ca3af] mt-1 text-center max-w-xs">
+          Could not connect to the server. Make sure the backend is running on <code className="text-[12px] bg-[#f3f4f6] px-1.5 py-0.5 rounded">localhost:8000</code>
+        </p>
+        <button
+          onClick={() => window.location.reload()}
+          className="mt-4 px-4 py-1.5 text-[13px] font-medium text-[#528FF0] border border-[#528FF0] rounded-md hover:bg-[#528FF0] hover:text-white transition-colors cursor-pointer"
+        >
+          Retry
+        </button>
       </div>
     );
   }
@@ -523,19 +530,13 @@ export default function DecisionTrace() {
 
         {/* THREE SUMMARY CARDS */}
         <div className="grid grid-cols-3 gap-4 mb-6">
-          <div
-            onClick={() => navigate('/rules')}
-            className="bg-white rounded-lg border border-[#e5e8ec] p-5 cursor-pointer hover:shadow-sm hover:border-[#d0d5dd] transition-all active:scale-[0.99]"
-          >
-            <div className="flex items-center justify-between mb-4">
-              <div className="flex items-center gap-2">
-                <WarningFilled className="text-[#d97706] text-[14px]" />
-                <span className="text-[14px] text-[#1b1f2b] font-semibold">Guardrail Overrides</span>
-                <Tooltip title="Decisions where the guardrail corrected the agent's proposal">
-                  <InfoCircleOutlined className="text-[#c4c9d4] text-[12px] cursor-help" />
-                </Tooltip>
-              </div>
-              <RightOutlined className="text-[#c4c9d4] text-[10px]" />
+          <div className="bg-white rounded-lg border border-[#e5e8ec] p-5">
+            <div className="flex items-center gap-2 mb-4">
+              <WarningFilled className="text-[#d97706] text-[14px]" />
+              <span className="text-[14px] text-[#1b1f2b] font-semibold">Guardrail Overrides</span>
+              <Tooltip title="Decisions where the guardrail corrected the agent's proposal">
+                <InfoCircleOutlined className="text-[#c4c9d4] text-[12px] cursor-help" />
+              </Tooltip>
             </div>
             <div className="mb-1">
               <span className="text-[32px] font-extrabold text-[#1b1f2b] leading-none">{suppressedCount}</span>
@@ -543,19 +544,13 @@ export default function DecisionTrace() {
             <div className="text-[13px] text-[#7b8294]">overridden decisions</div>
           </div>
 
-          <div
-            onClick={() => navigate('/trace')}
-            className="bg-white rounded-lg border border-[#e5e8ec] p-5 cursor-pointer hover:shadow-sm hover:border-[#d0d5dd] transition-all active:scale-[0.99]"
-          >
-            <div className="flex items-center justify-between mb-4">
-              <div className="flex items-center gap-2">
-                <ClockCircleOutlined className="text-[#528FF0] text-[14px]" />
-                <span className="text-[14px] text-[#1b1f2b] font-semibold">Pending</span>
-                <Tooltip title="Transactions awaiting resolution">
-                  <InfoCircleOutlined className="text-[#c4c9d4] text-[12px] cursor-help" />
-                </Tooltip>
-              </div>
-              <RightOutlined className="text-[#c4c9d4] text-[10px]" />
+          <div className="bg-white rounded-lg border border-[#e5e8ec] p-5">
+            <div className="flex items-center gap-2 mb-4">
+              <ClockCircleOutlined className="text-[#528FF0] text-[14px]" />
+              <span className="text-[14px] text-[#1b1f2b] font-semibold">Pending</span>
+              <Tooltip title="Transactions awaiting resolution">
+                <InfoCircleOutlined className="text-[#c4c9d4] text-[12px] cursor-help" />
+              </Tooltip>
             </div>
             <div className="mb-1">
               <span className="text-[32px] font-extrabold text-[#1b1f2b] leading-none">{pendingCount}</span>
@@ -563,19 +558,13 @@ export default function DecisionTrace() {
             <div className="text-[13px] text-[#7b8294]">awaiting action</div>
           </div>
 
-          <div
-            onClick={() => navigate('/exceptions')}
-            className="bg-white rounded-lg border border-[#e5e8ec] p-5 cursor-pointer hover:shadow-sm hover:border-[#d0d5dd] transition-all active:scale-[0.99]"
-          >
-            <div className="flex items-center justify-between mb-4">
-              <div className="flex items-center gap-2">
-                <CloseCircleFilled className="text-[#dc2626] text-[14px]" />
-                <span className="text-[14px] text-[#1b1f2b] font-semibold">Exceptions</span>
-                <Tooltip title="UNKNOWN classifications routed to human review">
-                  <InfoCircleOutlined className="text-[#c4c9d4] text-[12px] cursor-help" />
-                </Tooltip>
-              </div>
-              <RightOutlined className="text-[#c4c9d4] text-[10px]" />
+          <div className="bg-white rounded-lg border border-[#e5e8ec] p-5">
+            <div className="flex items-center gap-2 mb-4">
+              <CloseCircleFilled className="text-[#dc2626] text-[14px]" />
+              <span className="text-[14px] text-[#1b1f2b] font-semibold">Exceptions</span>
+              <Tooltip title="UNKNOWN classifications routed to human review">
+                <InfoCircleOutlined className="text-[#c4c9d4] text-[12px] cursor-help" />
+              </Tooltip>
             </div>
             <div className="mb-1">
               <span className="text-[32px] font-extrabold text-[#1b1f2b] leading-none">{failedCount}</span>

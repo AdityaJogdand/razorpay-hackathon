@@ -89,3 +89,28 @@ export async function fetchHealthCheck(): Promise<{ status: string; kill_switch:
   const { data } = await api.get('/health');
   return data;
 }
+
+export interface OPEResult {
+  method: string;
+  n_transactions: number;
+  agent_recovery_rate: number;
+  baseline_recovery_rate: number;
+  incremental_recovery_paise: number;
+  ci_lower_paise: number;
+  ci_upper_paise: number;
+  attempts_saved: number;
+  contacts_suppressed: number;
+  agreement_rate: number;
+  agent_attempts_per_recovery: number;
+  baseline_attempts_per_recovery: number;
+  agent_contacts: number;
+  baseline_contacts: number;
+  avg_time_to_recovery_agent_hours: number;
+  avg_time_to_recovery_baseline_hours: number;
+  by_class: Record<string, { total: number; agent_rate: number; baseline_rate: number }>;
+}
+
+export async function fetchOPE(params?: { method?: string; split?: string }): Promise<OPEResult> {
+  const { data } = await api.get('/ope/evaluate', { params });
+  return data;
+}

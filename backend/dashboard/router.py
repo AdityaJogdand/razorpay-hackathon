@@ -235,22 +235,16 @@ async def dashboard_summary(
     )
     recovered_amount = recovered_result.scalar() or 0
 
-    # Guardrail overrides count
-    override_count = (await db.execute(
-        select(func.count(AuditLedger.id))
+    # Guardrail overrides: count suppressed actions (agent proposal overridden by guardrail)
+    suppression_count = (await db.execute(
+        select(func.count(Action.id))
         .where(
-            AuditLedger.merchant_id == merchant_id,
-            AuditLedger.event_type == LedgerEventType.GUARDRAIL_RESULT,
+            Action.merchant_id == merchant_id,
+            Action.status == ActionStatus.SUPPRESSED,
         )
     )).scalar() or 0
 
-    # Suppression count
-    suppression_count = (await db.execute(
-        select(func.count(Suppression.id))
-        .where(Suppression.merchant_id == merchant_id)
-    )).scalar() or 0
-
-    # Pending count (events with no succeeded actions)
+    # Pending count: events with SCHEDULED actions but no SUCCEEDED action
     events_with_success = (
         select(Action.failure_event_id)
         .where(
@@ -258,13 +252,21 @@ async def dashboard_summary(
             Action.status == ActionStatus.SUCCEEDED,
         )
         .distinct()
-        .subquery()
+    )
+    events_with_scheduled = (
+        select(Action.failure_event_id)
+        .where(
+            Action.merchant_id == merchant_id,
+            Action.status == ActionStatus.SCHEDULED,
+        )
+        .distinct()
     )
     pending_count = (await db.execute(
         select(func.count(FailureEvent.id))
         .where(
             FailureEvent.merchant_id == merchant_id,
-            FailureEvent.id.notin_(select(events_with_success)),
+            FailureEvent.id.in_(events_with_scheduled),
+            FailureEvent.id.notin_(events_with_success),
         )
     )).scalar() or 0
 
