@@ -97,89 +97,14 @@ export default function AppLayout() {
   const activeNav = getActiveNav();
 
   return (
-    <div className="min-h-screen flex flex-col">
-      {/* ═══════ TOP NAV BAR ═══════ */}
-      <header className="h-[56px] flex items-center justify-between px-6 shrink-0 bg-white border-b border-[#e8e8e8]">
-        {/* Left — logo + nav */}
-        <div className="flex items-center h-full gap-5">
-          {/* Logo */}
-          <div
-            className="flex items-center cursor-pointer select-none shrink-0"
-            onClick={() => navigate('/')}
-          >
-            <img className="h-[30px]" src={Logo} alt="Logo" />
-          </div>
-
-          {/* Divider */}
-          <div className="w-[1px] h-[24px] bg-[#e8e8e8]" />
-
-          {/* Nav items */}
-          <nav className="flex items-center h-full gap-1">
-            {navItems.map((item) => {
-              const active = activeNav === item.key;
-              return (
-                <button
-                  key={item.key}
-                  onClick={() => navigate(item.key)}
-                  className={`
-                    border-0 cursor-pointer h-full flex items-center px-4 bg-transparent relative
-                    text-[13.5px] tracking-[-0.01em] transition-colors duration-150
-                    ${active
-                      ? 'text-[#1b1f2b] font-semibold'
-                      : 'text-[#6b7280] hover:text-[#1b1f2b]'
-                    }
-                  `}
-                >
-                  {item.label}
-                  {active && (
-                    <div
-                      className="absolute bottom-0 left-4 right-4 h-[2px] rounded-t-full"
-                      style={{ background: '#1b1f2b' }}
-                    />
-                  )}
-                </button>
-              );
-            })}
-          </nav>
-        </div>
-
-        {/* Right — search + controls */}
-        <div className="flex items-center gap-2">
-          {/* Search */}
-          <div className="flex items-center h-[34px] w-[240px] rounded-lg border border-[#e8e8e8] px-3 bg-[#fafafa] transition-colors duration-150 focus-within:border-[#c0c0c0] focus-within:bg-white">
-            <SearchOutlined className="text-[#9ca3af] text-[13px] mr-2 shrink-0" />
-            <input
-              type="text"
-              placeholder="Search..."
-              className="bg-transparent border-0 outline-none text-[13px] text-[#1b1f2b] placeholder:text-[#9ca3af] w-full"
-            />
-            <kbd className="text-[10px] text-[#9ca3af] bg-white border border-[#e8e8e8] rounded px-1.5 py-0.5 ml-1 shrink-0 font-mono">/</kbd>
-          </div>
-
-          {/* Notification */}
-          <button className="w-[34px] h-[34px] rounded-lg border border-transparent hover:border-[#e8e8e8] hover:bg-[#fafafa] flex items-center justify-center bg-transparent cursor-pointer transition-all duration-150 relative">
-            <BellOutlined className="text-[15px] text-[#6b7280]" />
-            <span className="absolute top-[7px] right-[8px] w-[6px] h-[6px] rounded-full bg-[#1b1f2b]" />
-          </button>
-
-          {/* Divider */}
-          <div className="w-[1px] h-[24px] bg-[#e8e8e8] mx-1" />
-
-          {/* Profile */}
-          <button className="flex items-center gap-2.5 h-[34px] rounded-lg px-2 border border-transparent hover:border-[#e8e8e8] hover:bg-[#fafafa] bg-transparent cursor-pointer transition-all duration-150">
-            <div className="w-[26px] h-[26px] rounded-full bg-[#1b1f2b] flex items-center justify-center">
-              <span className="text-[11px] font-semibold text-white leading-none">RA</span>
-            </div>
-            <DownOutlined className="text-[8px] text-[#9ca3af]" />
-          </button>
-        </div>
-      </header>
+    <div className="h-screen flex flex-col overflow-hidden bg-[#F7F6F6]">
 
       {/* ═══════ BODY ═══════ */}
-      <div className="flex flex-1 overflow-hidden bg-[#F7F6F6]">
+      <div className="flex flex-1 overflow-hidden">
         {/* ═══════ SIDEBAR ═══════ */}
-        <aside className="w-[250px] bg-white m-3 mr-0 rounded-2xl border border-[#e8e8e8] flex flex-col shrink-0 overflow-y-auto">
-          <nav className="flex-1 pt-2 pb-4">
+        <aside className="w-[250px] h-[calc(100vh-24px)] sticky top-3 self-start bg-white m-3 mr-0 rounded-2xl border border-[#e8e8e8] flex flex-col shrink-0 overflow-hidden">
+          <nav className="flex-1 pt-2 pb-4 overflow-y-auto">
+            <img src={Logo} alt="Razorpay Logo" className="h-10 w-auto mx-6 mb-4" />
             {mainItems.map((item) => (
               <div
                 key={item.key}
@@ -229,14 +154,12 @@ export default function AppLayout() {
               </div>
             ))}
 
-            <div className="flex items-center gap-1.5 mx-2.5 px-3 h-[38px] cursor-pointer text-[13px] font-semibold text-[#3b4055] hover:bg-[#ededed] rounded-lg">
-              <span>+2 More</span>
-              <DownOutlined className="text-[9px]" />
-            </div>
+         
+          
           </nav>
 
           {/* Bottom */}
-          <div className="border-t border-[#e5e8ec]">
+          <div className="border-t border-[#e5e8ec] bg-white shrink-0">
             <div className="flex items-center justify-between px-5 h-[46px]">
               <div className="flex items-center gap-2.5">
                 <ExclamationCircleOutlined className={`text-[15px] ${killSwitch ? 'text-red-500' : 'text-[#7b8294]'}`} />

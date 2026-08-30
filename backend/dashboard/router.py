@@ -32,7 +32,7 @@ async def list_failure_events(
     if failure_class:
         query = query.where(FailureEvent.failure_class == FailureClass(failure_class))
 
-    query = query.order_by(FailureEvent.failed_at.desc()).offset(offset).limit(limit)
+    query = query.order_by(FailureEvent.ingested_at.desc()).offset(offset).limit(limit)
 
     result = await db.execute(query)
     events = list(result.scalars().all())
@@ -111,6 +111,7 @@ async def list_failure_events(
         if actions:
             succeeded = [a for a in actions if a.status == ActionStatus.SUCCEEDED]
             failed = [a for a in actions if a.status == ActionStatus.FAILED]
+            scheduled = [a for a in actions if a.status == ActionStatus.SCHEDULED]
             if succeeded:
                 outcome = "recovered"
                 outcome_detail = f"Recovered via {succeeded[0].action_type.value}"
@@ -118,14 +119,16 @@ async def list_failure_events(
             elif all(a.status in (ActionStatus.FAILED, ActionStatus.SUPPRESSED) for a in actions):
                 outcome = "failed"
                 outcome_detail = "All actions failed"
+            elif scheduled:
+                outcome = "pending"
+                outcome_detail = f"{len(scheduled)} action(s) scheduled"
             elif any(a.status == ActionStatus.SUPPRESSED for a in actions):
                 outcome = "suppressed"
                 outcome_detail = "Action suppressed by guardrail"
-            else:
-                outcome = "pending"
-                outcome_detail = f"{len(actions)} action(s) scheduled"
 
-        if supps and outcome == "pending":
+        # Only mark as suppressed if there are NO actions at all
+        # (policy engine always creates some suppressions alongside valid actions)
+        if supps and not actions and outcome == "pending":
             outcome = "suppressed"
             outcome_detail = supps[0]["reason"]
 
@@ -156,6 +159,7 @@ async def list_failure_events(
                 "confidence": proposal.get("confidence", 0),
                 "retry_schedule": proposal.get("retry_schedule"),
                 "has_email_draft": proposal.get("has_email_draft", False),
+                "email_draft": proposal.get("email_draft"),
             },
             "guardrail": {
                 "status": guardrail_status,
@@ -163,6 +167,8 @@ async def list_failure_events(
                 "override_reason": guardrail.get("override_reason"),
                 "final_action": guardrail.get("final_action", ""),
             },
+            # Fallback action from policy engine actions (when agent hasn't processed yet)
+            "policy_action": actions[0].action_type.value if actions else "",
             "outcome": outcome,
             "outcome_detail": outcome_detail,
             "recovered_amount": recovered_amount,

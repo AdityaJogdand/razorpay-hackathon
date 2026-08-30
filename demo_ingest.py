@@ -134,26 +134,20 @@ st.divider()
 
 # ─── Ingest ───
 st.subheader("🚀 Run Pipeline")
-st.caption("Step 1: Ingest events → Step 2: Agent processes each → Dashboard shows results")
+st.caption("Ingest events → Agent reasons → Guardrail validates → Execution delivers (all automatic)")
 
-col_a, col_b = st.columns(2)
+ingest_btn = st.button("🚀 Ingest & Process", type="primary", use_container_width=True)
 
-with col_a:
-    ingest_only = st.button("Step 1: Ingest Only", use_container_width=True)
-with col_b:
-    ingest_and_process = st.button("Step 1 + 2: Ingest & Process with Agent", type="primary", use_container_width=True)
-
-if ingest_only or ingest_and_process:
+if ingest_btn:
     ingested_ids = []
     errors = []
 
-    # Step 1: Ingest
-    st.write("**Ingesting events...**")
+    st.write("**Ingesting & processing events (agent + guardrail + execution)...**")
     progress = st.progress(0)
     status_text = st.empty()
 
     for i, txn in enumerate(batch):
-        status_text.text(f"Ingesting {i + 1}/{len(batch)}: {txn['id']} ({txn['failure_class']})")
+        status_text.text(f"Processing {i + 1}/{len(batch)}: {txn['id']} ({txn['failure_class']})")
         try:
             code, resp = ingest_single(txn)
             if code == 200:
@@ -167,42 +161,12 @@ if ingest_only or ingest_and_process:
         progress.progress((i + 1) / len(batch))
 
     status_text.empty()
-    st.success(f"Ingested {len(ingested_ids)} events ({len(errors)} skipped/errors)")
+    st.success(f"Processed {len(ingested_ids)} events ({len(errors)} skipped/errors)")
 
     if errors:
         with st.expander(f"Errors ({len(errors)})"):
             for e in errors:
                 st.text(e)
-
-    # Step 2: Agent processing
-    if ingest_and_process and ingested_ids:
-        st.write("**Running agent pipeline...**")
-        progress2 = st.progress(0)
-        status_text2 = st.empty()
-        results = {"success": 0, "error": 0}
-
-        for i, event_id in enumerate(ingested_ids):
-            status_text2.text(f"Agent processing {i + 1}/{len(ingested_ids)}: {event_id[:12]}...")
-            try:
-                code, resp = process_agent(event_id)
-                if code == 200:
-                    results["success"] += 1
-                    # Show interesting results inline
-                    if resp.get("guardrail", {}).get("overridden"):
-                        st.info(
-                            f"🛡️ **Override** on `{resp.get('transaction_id', event_id[:12])}` — "
-                            f"Agent proposed `{resp['agent']['proposed_action']}`, "
-                            f"guardrail changed to `{resp['guardrail']['final_action']}`: "
-                            f"{resp['guardrail'].get('override_reason', '')}"
-                        )
-                else:
-                    results["error"] += 1
-            except Exception as e:
-                results["error"] += 1
-            progress2.progress((i + 1) / len(ingested_ids))
-
-        status_text2.empty()
-        st.success(f"Agent processed {results['success']} events ({results['error']} errors)")
 
     # Refresh stats
     st.divider()

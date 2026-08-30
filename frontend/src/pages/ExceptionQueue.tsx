@@ -2,19 +2,11 @@ import { useState } from 'react';
 import { Table, Tag, Button, Typography, Space, Select, Progress } from 'antd';
 import {
   CheckOutlined,
-  EditOutlined,
   ForwardOutlined,
 } from '@ant-design/icons';
 import { MOCK_TRANSACTIONS, type Transaction, type FailureClass } from '../mock/data';
 
 const unknowns = MOCK_TRANSACTIONS.filter((t) => t.failure_class === 'UNKNOWN');
-
-const CLASS_COLORS: Record<FailureClass, string> = {
-  HARD: 'red',
-  SOFT: 'orange',
-  MANDATE: 'blue',
-  UNKNOWN: 'default',
-};
 
 function formatAmount(paise: number): string {
   return '₹' + (paise / 100).toLocaleString('en-IN');

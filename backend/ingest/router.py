@@ -1,12 +1,17 @@
 """API routes for webhook ingest."""
 
+import logging
+
 from fastapi import APIRouter, Depends, Request, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.core.database import get_db
 from backend.ingest.schemas import WebhookPayload, IngestResponse
 from backend.ingest.service import process_webhook, verify_hmac
+from backend.agent.router import process_with_agent
 from backend.dashboard.ws import notify_dashboard_update
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/ingest", tags=["ingest"])
 
@@ -19,12 +24,19 @@ async def ingest_webhook(
     """
     Ingest a payment failure webhook.
 
-    Processes: normalize -> classify -> plan -> persist -> audit.
+    Processes: normalize -> classify -> plan -> persist -> audit -> agent.
     """
     result = await process_webhook(db, payload)
 
     if result["message"] == "duplicate":
         raise HTTPException(status_code=409, detail="Duplicate gateway event")
+
+    # Trigger agent processing: reasoning + guardrail + execution
+    event_id = result["event_id"]
+    try:
+        await process_with_agent(event_id, db)
+    except Exception as e:
+        logger.warning(f"Agent processing failed for {event_id}: {e}")
 
     await notify_dashboard_update("ingest")
 
@@ -47,6 +59,11 @@ async def ingest_batch(
     results = []
     for payload in payloads:
         result = await process_webhook(db, payload)
+        if result["message"] == "processed":
+            try:
+                await process_with_agent(result["event_id"], db)
+            except Exception as e:
+                logger.warning(f"Agent processing failed for {result['event_id']}: {e}")
         results.append(result)
     return {
         "processed": len([r for r in results if r["message"] == "processed"]),

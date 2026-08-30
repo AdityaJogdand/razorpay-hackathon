@@ -216,12 +216,53 @@ for code, cls in CARD_DECLINE_CODE_MAP.items():
     _UNIFIED_MAP[code] = (cls, "iso8583")
 
 
+def normalize_error_code(code: str | None) -> str:
+    """Normalize raw gateway error strings into the canonical taxonomy keys."""
+    if not code:
+        return ""
+
+    normalized = code.strip().upper()
+    aliases = {
+        "INSUFFICIENT_FUNDS": "payment_failed_because_insufficient_balance",
+        "INSUFFICIENT_BALANCE": "payment_failed_because_insufficient_balance",
+        "CARD_EXPIRED": "payment_failed_because_card_expired",
+        "EXPIRED_CARD": "payment_failed_because_card_expired",
+        "INVALID_CARD": "payment_failed_because_card_invalid",
+        "CARD_INVALID": "payment_failed_because_card_invalid",
+        "ACCOUNT_CLOSED": "payment_failed_because_account_closed",
+        "MANDATE_EXPIRED": "payment_failed_because_mandate_expired",
+        "MANDATE_REVOKED": "payment_failed_because_mandate_revoked",
+        "MANDATE_NOT_FOUND": "payment_failed_because_mandate_not_found",
+        "DO_NOT_HONOR": "payment_failed_because_do_not_honor",
+        "DECLINED_BY_ISSUER": "payment_failed_because_declined_by_issuer",
+        "RISK_CHECK_FAILED": "payment_failed_because_risk_check_failed",
+        "GATEWAY_TIMEOUT": "payment_failed_because_gateway_timeout",
+        "ISSUER_UNAVAILABLE": "payment_failed_because_issuer_unavailable",
+        "INVALID_VPA": "payment_failed_because_invalid_vpa",
+    }
+
+    if normalized in aliases:
+        return aliases[normalized]
+
+    # Common raw names use lowercase/underscore formatting; normalize to canonical style.
+    mapped = normalized.replace("-", "_").replace(" ", "_")
+    mapped = mapped.lower()
+    mapped = mapped.replace("/", "_")
+    mapped = mapped.replace("__", "_")
+    if mapped.startswith("payment_failed_because_"):
+        return mapped
+    if mapped.startswith("payment_failed_"):
+        return "payment_failed_because_" + mapped.removeprefix("payment_failed_")
+    return mapped
+
+
 def classify_by_rules(normalized_code: str) -> tuple[FailureClass | None, str | None]:
     """
     Look up a normalized decline code in the taxonomy.
     Returns (FailureClass, source) or (None, None) if unmapped.
     """
-    result = _UNIFIED_MAP.get(normalized_code)
+    candidate = normalize_error_code(normalized_code)
+    result = _UNIFIED_MAP.get(candidate)
     if result:
         return result
     return None, None

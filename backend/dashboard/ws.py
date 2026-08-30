@@ -37,4 +37,4 @@ async def notify_dashboard_update(event_type: str = "refresh"):
             await ws.send_text(message)
         except Exception:
             dead.add(ws)
-    _clients -= dead
+    _clients.difference_update(dead)

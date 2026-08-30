@@ -114,6 +114,7 @@ async def process_with_agent(
             "confidence": proposal.confidence,
             "retry_schedule": proposal.retry_schedule,
             "has_email_draft": proposal.email_draft is not None,
+            "email_draft": proposal.email_draft,
         },
     )
 
@@ -195,7 +196,7 @@ async def process_with_agent(
                 merchant_id=event.merchant_id,
                 action_type=ActionType.RETRY,
                 status=ActionStatus.SCHEDULED,
-                idempotency_key=f"{event.transaction_id}:AGENT_RETRY:{retry_num}",
+                idempotency_key=f"{event.id}:{event.transaction_id}:AGENT_RETRY:{retry_num}",
                 scheduled_at=now + timedelta(hours=offset_hours),
                 retry_number=retry_num,
                 estimated_success_prob=proposal.confidence,
@@ -244,7 +245,7 @@ async def process_with_agent(
             merchant_id=event.merchant_id,
             action_type=at,
             status=ActionStatus.SCHEDULED,
-            idempotency_key=f"{event.transaction_id}:AGENT_{final_action_type}:{contact_num}",
+            idempotency_key=f"{event.id}:{event.transaction_id}:AGENT_{final_action_type}:{contact_num}",
             scheduled_at=now,
         )
         db.add(action_row)
@@ -271,7 +272,7 @@ async def process_with_agent(
             merchant_id=event.merchant_id,
             action_type=ActionType.ESCALATE_HUMAN,
             status=ActionStatus.SCHEDULED,
-            idempotency_key=f"{event.transaction_id}:AGENT_ESCALATE:{uuid.uuid4().hex[:8]}",
+            idempotency_key=f"{event.id}:{event.transaction_id}:AGENT_ESCALATE:{uuid.uuid4().hex[:8]}",
             scheduled_at=now,
         )
         db.add(action_row)

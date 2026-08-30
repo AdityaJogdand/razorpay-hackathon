@@ -177,7 +177,7 @@ def _plan_soft(
             action_type="RETRY",
             scheduled_offset_hours=offset,
             retry_number=retry_num,
-            idempotency_key=f"{txn_id}:RETRY:{retry_num}",
+            idempotency_key=f"{event_id}:{txn_id}:RETRY:{retry_num}",
         ))
 
     # Stopping rule: no contact for SOFT failures (retries handle it)
@@ -248,7 +248,7 @@ def _plan_unknown(
     actions.append(PlannedAction(
         action_type="ESCALATE_HUMAN",
         scheduled_offset_hours=0,
-        idempotency_key=f"{txn_id}:ESCALATE:1",
+        idempotency_key=f"{event_id}:{txn_id}:ESCALATE:1",
     ))
 
     suppressions.append(Suppression(
@@ -312,5 +312,5 @@ def _plan_contact(
     actions.append(PlannedAction(
         action_type="CONTACT_EMAIL",
         scheduled_offset_hours=config.contact_cooldown_hours,
-        idempotency_key=f"{txn_id}:CONTACT_EMAIL:{contact_num}",
+        idempotency_key=f"{event_id}:{txn_id}:CONTACT_EMAIL:{contact_num}",
     ))

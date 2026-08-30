@@ -22,6 +22,7 @@ export interface DashboardEvent {
     confidence: number;
     retry_schedule: number[] | null;
     has_email_draft: boolean;
+    email_draft: { subject: string; body: string } | null;
   };
   guardrail: {
     status: 'approved' | 'overridden';
@@ -29,6 +30,7 @@ export interface DashboardEvent {
     override_reason: string | null;
     final_action: string;
   };
+  policy_action: string;
   outcome: 'recovered' | 'failed' | 'pending' | 'suppressed';
   outcome_detail: string;
   recovered_amount: number;

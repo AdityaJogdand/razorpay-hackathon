@@ -25,6 +25,7 @@ from backend.models.tables import (
     FailureEvent, RecoveryPlan, Action, Suppression, ConfigVersion,
 )
 from backend.classifier.service import classify
+from backend.classifier.taxonomy import normalize_error_code
 from backend.policy.engine import (
     create_recovery_plan, PolicyConfig, CustomerContext, PlannedAction,
 )
@@ -92,7 +93,7 @@ async def process_webhook(db: AsyncSession, payload: WebhookPayload) -> dict:
 
     # --- F2: Normalize ---
     instrument_type = InstrumentType(payload.instrument_type)
-    normalized_code = payload.error_code  # already normalized in our taxonomy
+    normalized_code = normalize_error_code(payload.error_code)
 
     # --- F3: Classify ---
     failure_class, classification_source, confidence = await classify(
