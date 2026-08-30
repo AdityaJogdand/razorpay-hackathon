@@ -1,10 +1,17 @@
+import secrets
+
 from pydantic_settings import BaseSettings
+from pydantic import Field
 
 
 class Settings(BaseSettings):
-    database_url: str = "postgresql+asyncpg://recovery:recovery_dev_pass@localhost:5434/recovery_agent"
-    database_url_sync: str = "postgresql+psycopg2://recovery:recovery_dev_pass@localhost:5434/recovery_agent"
-    webhook_secret: str = "whsec_test_secret_key_for_dev"
+    database_url: str = Field(..., description="PostgreSQL async connection URL")
+    database_url_sync: str = Field(..., description="PostgreSQL sync connection URL")
+    webhook_secret: str = Field(..., description="HMAC secret for webhook signature verification")
+    api_key: str = Field(
+        default_factory=lambda: secrets.token_urlsafe(32),
+        description="API key for authenticating dashboard/admin requests",
+    )
     ollama_base_url: str = "http://localhost:11434"
     ollama_model: str = "llama3.2"
     gmail_user: str = ""

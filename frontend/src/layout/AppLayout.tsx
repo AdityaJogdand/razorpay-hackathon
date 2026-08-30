@@ -4,20 +4,16 @@ import { Switch, Modal, Button, message } from 'antd';
 import { toggleKillSwitch, verifyLedger as verifyLedgerApi, fetchHealthCheck } from '../api/dashboard';
 import {
   HomeOutlined,
-  ThunderboltOutlined,
   BarChartOutlined,
   SafetyOutlined,
   MailOutlined,
   SettingOutlined,
-  SearchOutlined,
-  UserOutlined,
   CheckCircleOutlined,
+  CloseCircleOutlined,
   ExclamationCircleOutlined,
   SwapOutlined,
   FileTextOutlined,
   LinkOutlined,
-  DownOutlined,
-  BellOutlined,
 } from '@ant-design/icons';
 import Logo from '../assets/razor-pay-logo.png';
 
@@ -61,16 +57,10 @@ export default function AppLayout() {
       setLedgerVerified(result.valid);
       setLedgerInfo({ entries: result.entries_checked, hash: result.head_hash });
     } catch {
-      setTimeout(() => setLedgerVerified(true), 1500);
-      setLedgerInfo({ entries: 0, hash: 'unavailable' });
+      setLedgerVerified(false);
+      setLedgerInfo({ entries: 0, hash: 'unavailable — backend unreachable' });
     }
   };
-
-  const navItems = [
-    { key: '/', label: 'Home' },
-    { key: '/trace', label: 'Decisions' },
-    { key: '/batch', label: 'Measurement' },
-  ];
 
   const mainItems: SidebarItem[] = [
     { key: '/', icon: <HomeOutlined />, label: 'Home' },
@@ -86,15 +76,6 @@ export default function AppLayout() {
   ];
 
   const isActive = (key: string) => location.pathname === key;
-
-  const getActiveNav = () => {
-    const path = location.pathname;
-    if (path === '/') return '/';
-    if (path === '/trace' || path === '/exceptions' || path === '/rules' || path === '/emails') return '/trace';
-    if (path === '/batch') return '/batch';
-    return '/';
-  };
-  const activeNav = getActiveNav();
 
   return (
     <div className="h-screen flex flex-col overflow-hidden bg-[#F7F6F6]">
@@ -211,7 +192,7 @@ export default function AppLayout() {
             <div className="animate-spin rounded-full h-8 w-8 border-2 border-[#e5e8ec] border-t-[#528FF0]" />
             <span className="text-[#7b8294] text-sm">Verifying hash chain...</span>
           </div>
-        ) : (
+        ) : ledgerVerified ? (
           <div className="flex flex-col items-center py-8 gap-3">
             <CheckCircleOutlined className="text-4xl text-[#2da44e]" />
             <span className="text-lg font-semibold text-[#1b1f2b]">Hash chain intact</span>
@@ -221,6 +202,16 @@ export default function AppLayout() {
             <code className="text-xs text-[#7b8294] mt-2 bg-[#f5f5f5] px-3 py-1 rounded">
               HEAD: {ledgerInfo?.hash ? `${ledgerInfo.hash.slice(0, 8)}...${ledgerInfo.hash.slice(-8)}` : 'N/A'}
             </code>
+          </div>
+        ) : (
+          <div className="flex flex-col items-center py-8 gap-3">
+            <CloseCircleOutlined className="text-4xl text-[#ef4444]" />
+            <span className="text-lg font-semibold text-[#1b1f2b]">Verification failed</span>
+            <span className="text-[#7b8294] text-sm">
+              {ledgerInfo?.hash === 'unavailable — backend unreachable'
+                ? 'Backend unreachable. Cannot verify ledger integrity.'
+                : 'Hash chain integrity check failed. Possible tampering detected.'}
+            </span>
           </div>
         )}
       </Modal>

@@ -1,14 +1,18 @@
 """Dashboard API — aggregated views for the frontend."""
 
-from fastapi import APIRouter, Depends, Query
-from sqlalchemy import select, func, case, and_
+from enum import Enum
+
+from fastapi import APIRouter, Depends, Query, HTTPException
+from pydantic import BaseModel, Field
+from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.core.database import get_db
+from backend.core.security import mask_email, mask_token, validate_uuid
 from backend.models.enums import (
     FailureClass, ActionType, ActionStatus, LedgerEventType,
 )
-from backend.models.tables import FailureEvent, Action, Suppression, AuditLedger
+from backend.models.tables import FailureEvent, Action, Suppression, AuditLedger, ExceptionResolution
 
 router = APIRouter(prefix="/dashboard", tags=["dashboard"])
 
@@ -142,9 +146,9 @@ async def list_failure_events(
             "transaction_id": e.transaction_id,
             "merchant_id": e.merchant_id,
             "customer_id": e.customer_id,
-            "customer_email": e.customer_email or "",
+            "customer_email": mask_email(e.customer_email),
             "instrument_type": e.instrument_type.value,
-            "instrument_token": e.instrument_token,
+            "instrument_token": mask_token(e.instrument_token),
             "amount_paise": e.amount_paise,
             "currency": e.currency,
             "decline_code": e.raw_error_code,
@@ -166,6 +170,7 @@ async def list_failure_events(
                 "checks": guardrail.get("checks", []),
                 "override_reason": guardrail.get("override_reason"),
                 "final_action": guardrail.get("final_action", ""),
+                "shacl": guardrail.get("shacl"),
             },
             # Fallback action from policy engine actions (when agent hasn't processed yet)
             "policy_action": actions[0].action_type.value if actions else "",
@@ -282,4 +287,81 @@ async def dashboard_summary(
         "exception_count": exception_count,
         "by_class": class_counts,
         "by_action_status": action_counts,
+    }
+
+
+# --- Exception Resolution Endpoints ---
+
+class ResolutionType(str, Enum):
+    APPROVE_SOFT = "APPROVE_SOFT"
+    OVERRIDE_HARD = "OVERRIDE_HARD"
+    OVERRIDE_SOFT = "OVERRIDE_SOFT"
+    OVERRIDE_MANDATE = "OVERRIDE_MANDATE"
+    ESCALATE = "ESCALATE"
+
+
+class ResolveExceptionRequest(BaseModel):
+    resolution_type: ResolutionType
+    notes: str | None = Field(None, max_length=1000)
+
+
+@router.post("/exceptions/{event_id}/resolve")
+async def resolve_exception(
+    event_id: str,
+    body: ResolveExceptionRequest,
+    merchant_id: str = "merchant_demo_001",
+    db: AsyncSession = Depends(get_db),
+):
+    """Mark an exception queue item as resolved by a human reviewer."""
+    validate_uuid(event_id)
+
+    # Check if already resolved
+    existing = await db.execute(
+        select(ExceptionResolution).where(ExceptionResolution.failure_event_id == event_id)
+    )
+    if existing.scalar_one_or_none():
+        raise HTTPException(status_code=409, detail="Already resolved")
+
+    resolution = ExceptionResolution(
+        failure_event_id=event_id,
+        merchant_id=merchant_id,
+        resolution_type=body.resolution_type.value,
+        notes=body.notes,
+    )
+    db.add(resolution)
+    await db.commit()
+    await db.refresh(resolution)
+
+    return {
+        "id": str(resolution.id),
+        "failure_event_id": str(resolution.failure_event_id),
+        "resolution_type": resolution.resolution_type,
+        "resolved_at": resolution.resolved_at.isoformat(),
+    }
+
+
+@router.get("/exceptions/resolutions")
+async def list_resolutions(
+    merchant_id: str = "merchant_demo_001",
+    db: AsyncSession = Depends(get_db),
+):
+    """Get all resolved exception IDs for the merchant."""
+    result = await db.execute(
+        select(ExceptionResolution)
+        .where(ExceptionResolution.merchant_id == merchant_id)
+        .order_by(ExceptionResolution.resolved_at.desc())
+    )
+    resolutions = result.scalars().all()
+    return {
+        "resolutions": [
+            {
+                "id": str(r.id),
+                "failure_event_id": str(r.failure_event_id),
+                "resolution_type": r.resolution_type,
+                "resolved_by": r.resolved_by,
+                "notes": r.notes,
+                "resolved_at": r.resolved_at.isoformat(),
+            }
+            for r in resolutions
+        ]
     }

@@ -29,6 +29,14 @@ export interface DashboardEvent {
     checks: Array<{ rule: string; passed: boolean; detail?: string }>;
     override_reason: string | null;
     final_action: string;
+    shacl?: {
+      conforms: boolean;
+      engine: string;
+      ontology: string;
+      shapes: string;
+      data_graph_turtle?: string;
+      results_text?: string;
+    } | null;
   };
   policy_action: string;
   outcome: 'recovered' | 'failed' | 'pending' | 'suppressed';
@@ -108,6 +116,32 @@ export interface OPEResult {
   avg_time_to_recovery_agent_hours: number;
   avg_time_to_recovery_baseline_hours: number;
   by_class: Record<string, { total: number; agent_rate: number; baseline_rate: number }>;
+}
+
+export interface ExceptionResolution {
+  id: string;
+  failure_event_id: string;
+  resolution_type: string;
+  resolved_by: string;
+  notes: string | null;
+  resolved_at: string;
+}
+
+export async function resolveException(
+  eventId: string,
+  resolutionType: string,
+  notes?: string,
+): Promise<{ id: string; failure_event_id: string; resolution_type: string; resolved_at: string }> {
+  const { data } = await api.post(`/dashboard/exceptions/${eventId}/resolve`, {
+    resolution_type: resolutionType,
+    notes,
+  });
+  return data;
+}
+
+export async function fetchExceptionResolutions(): Promise<{ resolutions: ExceptionResolution[] }> {
+  const { data } = await api.get('/dashboard/exceptions/resolutions');
+  return data;
 }
 
 export async function fetchOPE(params?: { method?: string; split?: string }): Promise<OPEResult> {

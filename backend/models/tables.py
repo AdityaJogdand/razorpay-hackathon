@@ -152,6 +152,20 @@ class AuditLedger(Base):
     )
 
 
+class ExceptionResolution(Base):
+    __tablename__ = "exception_resolutions"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    failure_event_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("failure_events.id"), nullable=False, unique=True
+    )
+    merchant_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    resolution_type: Mapped[str] = mapped_column(String(32), nullable=False)  # APPROVE_SOFT, OVERRIDE_HARD, OVERRIDE_SOFT, OVERRIDE_MANDATE, ESCALATE
+    resolved_by: Mapped[str] = mapped_column(String(128), nullable=False, default="human_reviewer")
+    notes: Mapped[str] = mapped_column(Text, nullable=True)
+    resolved_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow)
+
+
 class ConfigVersion(Base):
     __tablename__ = "config_versions"
 

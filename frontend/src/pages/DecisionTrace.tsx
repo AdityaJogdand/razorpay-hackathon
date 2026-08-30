@@ -68,6 +68,14 @@ function apiEventToTransaction(e: DashboardEvent): Transaction {
       detail: c.detail,
     })),
     guardrail_override_reason: e.guardrail.override_reason || undefined,
+    shacl: e.guardrail.shacl ? {
+      conforms: e.guardrail.shacl.conforms,
+      engine: e.guardrail.shacl.engine,
+      ontology: e.guardrail.shacl.ontology,
+      shapes: e.guardrail.shacl.shapes,
+      data_graph_turtle: e.guardrail.shacl.data_graph_turtle,
+      results_text: e.guardrail.shacl.results_text,
+    } : undefined,
     outcome: e.outcome as Transaction['outcome'],
     outcome_detail: e.outcome_detail,
     failed_at: e.failed_at,
@@ -755,6 +763,8 @@ function DetailBadge({ icon, label }: { icon: React.ReactNode; label: string }) 
 function TransactionDetail({ txn, onClose }: { txn: Transaction; onClose: () => void }) {
   const actionType = getActionType(txn.proposed_action);
   const [showGuardrailChecks, setShowGuardrailChecks] = useState(false);
+  const [showShaclDetails, setShowShaclDetails] = useState(false);
+  const [showDataGraph, setShowDataGraph] = useState(false);
 
   const outcomeIcon: Record<string, React.ReactNode> = {
     recovered: <CheckCircleFilled className="text-[13px] text-[#22c55e]" />,
@@ -889,8 +899,26 @@ function TransactionDetail({ txn, onClose }: { txn: Transaction; onClose: () => 
                   'no_email_on_file': 'Email address available',
                   'unknown_must_escalate': 'Unknown failures need human review',
                   'kill_switch': 'System is active',
+                  'rbi_pre_debit_notification': 'RBI pre-debit notification sent',
+                  'card_network_do_not_retry': 'Card network retry allowed',
+                  'rbi_email_transparency': 'RBI email transparency',
+                };
+                const policyRef: Record<string, string> = {
+                  'hard_no_retry': 'Visa Core Rules 2024 · Mastercard Rules',
+                  'mandate_no_retry': 'RBI e-Mandate Framework · NPCI UPI',
+                  'max_retry_count': 'Visa 15/30d · MC 10-25/30d · NPCI 5/txn',
+                  'retry_window': 'Visa/Mastercard 30-day · NPCI 48h',
+                  'contact_frequency_cap': 'RBI Digital Lending Guidelines',
+                  'customer_opt_out': 'RBI Customer Protection · IT Act §43A',
+                  'no_email_on_file': 'RBI Digital Lending Guidelines',
+                  'unknown_must_escalate': 'RBI Risk Management Framework',
+                  'kill_switch': 'RBI Business Continuity Planning',
+                  'rbi_pre_debit_notification': 'RBI e-Mandate · NPCI OC-151',
+                  'card_network_do_not_retry': 'Visa/Mastercard Do-Not-Retry List',
+                  'rbi_email_transparency': 'RBI/DOR/2022-23/145',
                 };
                 const label = friendlyName[check.rule] || check.rule.replace(/_/g, ' ');
+                const policy = policyRef[check.rule];
                 return (
                   <div key={i} className="flex items-start gap-2">
                     {check.passed ? (
@@ -900,6 +928,9 @@ function TransactionDetail({ txn, onClose }: { txn: Transaction; onClose: () => 
                     )}
                     <div>
                       <div className="text-[12.5px] text-[#4b5563]">{label}</div>
+                      {policy && (
+                        <div className="text-[10px] text-[#528FF0] mt-0.5">{policy}</div>
+                      )}
                       {check.detail && (
                         <div className="text-[11px] text-[#9ca3af] mt-0.5">{check.detail}</div>
                       )}
@@ -916,6 +947,102 @@ function TransactionDetail({ txn, onClose }: { txn: Transaction; onClose: () => 
             </div>
           )}
         </div>
+
+        {/* SHACL Validation */}
+        {txn.shacl && (
+          <div className="px-6 py-4 border-t border-[#f0f0f0]">
+            <button
+              onClick={() => setShowShaclDetails(!showShaclDetails)}
+              className="w-full flex items-center justify-between bg-transparent border-0 cursor-pointer p-0"
+            >
+              <div className="flex items-center gap-2.5">
+                <span className="text-[11px] font-semibold text-[#9ca3af] uppercase tracking-wider">SHACL Validation</span>
+                <span className={`inline-flex items-center gap-1 text-[10px] font-semibold px-2 py-0.5 rounded-full ${
+                  txn.shacl.conforms
+                    ? 'bg-[#f0fdf4] text-[#22c55e]'
+                    : 'bg-[#fef2f2] text-[#ef4444]'
+                }`}>
+                  {txn.shacl.conforms ? 'Conforms' : 'Violations found'}
+                </span>
+              </div>
+              <RightOutlined
+                className="text-[9px] text-[#9ca3af] transition-transform"
+                style={{ transform: showShaclDetails ? 'rotate(90deg)' : 'none' }}
+              />
+            </button>
+
+            {showShaclDetails && (
+              <div className="mt-3">
+                {/* Engine info */}
+                <div className="grid grid-cols-3 gap-3 mb-4">
+                  <div className="bg-[#f8f9fb] rounded-lg px-3 py-2.5">
+                    <div className="text-[9px] font-semibold text-[#9ca3af] uppercase tracking-wider mb-0.5">Engine</div>
+                    <div className="text-[12px] font-semibold text-[#1b1f2b]">{txn.shacl.engine}</div>
+                  </div>
+                  <div className="bg-[#f8f9fb] rounded-lg px-3 py-2.5">
+                    <div className="text-[9px] font-semibold text-[#9ca3af] uppercase tracking-wider mb-0.5">Ontology</div>
+                    <div className="text-[12px] font-semibold text-[#1b1f2b]">{txn.shacl.ontology}</div>
+                  </div>
+                  <div className="bg-[#f8f9fb] rounded-lg px-3 py-2.5">
+                    <div className="text-[9px] font-semibold text-[#9ca3af] uppercase tracking-wider mb-0.5">Shapes</div>
+                    <div className="text-[12px] font-semibold text-[#1b1f2b]">{txn.shacl.shapes}</div>
+                  </div>
+                </div>
+
+                {/* Conformance result */}
+                <div className={`rounded-lg border px-4 py-3 mb-3 ${
+                  txn.shacl.conforms
+                    ? 'border-[#bbf7d0] bg-[#f0fdf4]'
+                    : 'border-[#fecaca] bg-[#fef2f2]'
+                }`}>
+                  <div className="flex items-center gap-2">
+                    {txn.shacl.conforms ? (
+                      <CheckCircleFilled className="text-[14px] text-[#22c55e]" />
+                    ) : (
+                      <CloseCircleFilled className="text-[14px] text-[#ef4444]" />
+                    )}
+                    <span className="text-[13px] font-semibold text-[#1b1f2b]">
+                      {txn.shacl.conforms
+                        ? 'Proposal conforms to all SHACL constraints'
+                        : 'Proposal violated SHACL constraints — guardrail override applied'}
+                    </span>
+                  </div>
+                </div>
+
+                {/* SHACL results text */}
+                {txn.shacl.results_text && (
+                  <div className="mb-3">
+                    <div className="text-[10px] font-semibold text-[#9ca3af] uppercase tracking-wider mb-1.5">Validation Report</div>
+                    <pre className="bg-[#1b1f2b] text-[#e5e8ec] text-[11px] leading-[1.6] rounded-lg p-3 overflow-x-auto whitespace-pre-wrap font-mono max-h-[200px] overflow-y-auto">
+                      {txn.shacl.results_text}
+                    </pre>
+                  </div>
+                )}
+
+                {/* RDF Data Graph */}
+                {txn.shacl.data_graph_turtle && (
+                  <div>
+                    <button
+                      onClick={() => setShowDataGraph(!showDataGraph)}
+                      className="flex items-center gap-1.5 text-[11px] font-semibold text-[#528FF0] bg-transparent border-0 cursor-pointer p-0 mb-1.5 hover:text-[#4280e0] transition-colors"
+                    >
+                      <RightOutlined
+                        className="text-[8px] transition-transform"
+                        style={{ transform: showDataGraph ? 'rotate(90deg)' : 'none' }}
+                      />
+                      RDF Data Graph (Turtle)
+                    </button>
+                    {showDataGraph && (
+                      <pre className="bg-[#1b1f2b] text-[#a5d6ff] text-[11px] leading-[1.6] rounded-lg p-3 overflow-x-auto whitespace-pre-wrap font-mono max-h-[250px] overflow-y-auto">
+                        {txn.shacl.data_graph_turtle}
+                      </pre>
+                    )}
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+        )}
 
         {/* Email Draft */}
         {txn.email_draft && (
@@ -986,7 +1113,18 @@ function TransactionDetail({ txn, onClose }: { txn: Transaction; onClose: () => 
               },
               {
                 color: txn.guardrail_status === 'overridden' ? '#f59e0b' : '#22c55e',
-                children: <span className="text-[12.5px] text-[#4b5563]">Guardrail: {txn.guardrail_status === 'overridden' ? 'Override applied' : 'Approved'}</span>,
+                children: (
+                  <span className="text-[12.5px] text-[#4b5563]">
+                    SHACL guardrail: {txn.guardrail_status === 'overridden' ? 'Override applied' : 'Approved'}
+                    {txn.shacl && (
+                      <span className={`ml-1.5 text-[10px] font-medium px-1.5 py-0.5 rounded ${
+                        txn.shacl.conforms ? 'bg-[#f0fdf4] text-[#22c55e]' : 'bg-[#fef2f2] text-[#ef4444]'
+                      }`}>
+                        {txn.shacl.conforms ? 'conforms' : 'violations'}
+                      </span>
+                    )}
+                  </span>
+                ),
               },
               {
                 color: txn.outcome === 'recovered' ? '#22c55e' : '#d1d5db',

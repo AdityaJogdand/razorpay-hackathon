@@ -1,0 +1,276 @@
+@prefix rdf:   <http://www.w3.org/1999/02/22-rdf-syntax-ns#> .
+@prefix rdfs:  <http://www.w3.org/2000/01/rdf-schema#> .
+@prefix xsd:   <http://www.w3.org/2001/XMLSchema#> .
+@prefix owl:   <http://www.w3.org/2002/07/owl#> .
+@prefix ra:    <http://razorpay.com/recovery-agent/ontology#> .
+
+# ============================================================
+# Payment Recovery Agent Ontology (RDF/OWL)
+# Formalizes the domain: failure events, agent proposals,
+# guardrail rules, and recovery actions.
+# ============================================================
+
+ra: a owl:Ontology ;
+    rdfs:label "Payment Recovery Agent Ontology" ;
+    rdfs:comment """Formal specification of the AI agent's recovery decision domain.
+    Incorporates regulatory policies from RBI, NPCI, Visa, and Mastercard.""" .
+
+# ── Classes ──────────────────────────────────────────────────
+
+ra:AgentProposal a rdfs:Class ;
+    rdfs:label "Agent Proposal" ;
+    rdfs:comment "A recovery strategy proposed by the AI agent for a failed payment." .
+
+ra:FailureContext a rdfs:Class ;
+    rdfs:label "Failure Context" ;
+    rdfs:comment "Contextual data about the payment failure and customer state." .
+
+ra:GuardrailResult a rdfs:Class ;
+    rdfs:label "Guardrail Result" ;
+    rdfs:comment "The outcome of SHACL-based guardrail validation on a proposal." .
+
+ra:RegulatoryPolicy a rdfs:Class ;
+    rdfs:label "Regulatory Policy" ;
+    rdfs:comment "A regulatory or network rule that constrains recovery actions." .
+
+# ── Regulatory Policy Instances ──────────────────────────────
+
+ra:RBI_PreDebitNotification a ra:RegulatoryPolicy ;
+    rdfs:label "RBI Pre-Debit Notification" ;
+    rdfs:comment """RBI Master Direction on Payment Aggregators (2021) & NPCI Circular OC-151:
+    Pre-debit notification must be sent 24 hours before recurring mandate execution.
+    Failure code U47 = pre-debit notification not sent.""" ;
+    ra:policySource "RBI/DPSS/CO/PD-02/2021" ;
+    ra:policyUrl "https://www.rbi.org.in/Scripts/NotificationUser.aspx?Id=12208" .
+
+ra:RBI_CustomerProtection a ra:RegulatoryPolicy ;
+    rdfs:label "RBI Customer Protection" ;
+    rdfs:comment """RBI Circular on Customer Protection in Unauthorised Electronic Banking
+    Transactions (2017): Customer opt-out preferences must be honored.
+    No unsolicited recovery communications after opt-out.""" ;
+    ra:policySource "RBI/DBR/2017-18/15" ;
+    ra:policyUrl "https://www.rbi.org.in/Scripts/NotificationUser.aspx?Id=11040" .
+
+ra:NPCI_UPI_RetryLimit a ra:RegulatoryPolicy ;
+    rdfs:label "NPCI UPI Retry Limit" ;
+    rdfs:comment """NPCI UPI Procedural Guidelines & Dispute Resolution Framework:
+    - UPI AutoPay (Aug 2025 update): Max 4 total attempts (1 original + 3 retries)
+    - After 4 attempts: Payment cancelled, mandate auto-disabled
+    - 48-hour window for UPI transaction reversal requests
+    - Retry timing best practice: 24h, then 72h, then day 7""" ;
+    ra:policySource "NPCI/UPI/OC-79/2023" ;
+    ra:policyUrl "https://www.npci.org.in/what-we-do/upi/product-statistics" .
+
+ra:Visa_RetryRules a ra:RegulatoryPolicy ;
+    rdfs:label "Visa Retry Rules" ;
+    rdfs:comment """Visa Transaction Processing Rules (Apr 2024):
+    - Soft declines: Max 15 retry attempts within 30 days
+    - Response codes 41,43 (lost/stolen): Must NEVER retry
+    - Response codes 04,07,34,59 (fraud): Must NEVER retry
+    - Account status declines (54,62,78): Max 1 retry after 24h
+    - Visa Account Updater (VAU) should be checked before retrying expired cards.""" ;
+    ra:policySource "Visa Core Rules 2024" ;
+    ra:policyUrl "https://usa.visa.com/dam/VCOM/global/support-legal/documents/visa-core-rules-main.pdf" .
+
+ra:Mastercard_RetryRules a ra:RegulatoryPolicy ;
+    rdfs:label "Mastercard Retry Rules" ;
+    rdfs:comment """Mastercard Transaction Processing Rules (2024):
+    - Account-related declines: Max 10 retries within 30 days
+    - Other soft declines: Max 25 retries within 30 days
+    - Response codes 41,43 (lost/stolen): Must NEVER retry
+    - Excessive retries incur Mastercard Excessive Retry fees (>10/month)
+    - Mastercard Automatic Billing Updater (ABU) should be used for expired cards.""" ;
+    ra:policySource "Mastercard Rules Manual 2024" ;
+    ra:policyUrl "https://www.mastercard.us/content/dam/public/mastercardcom/na/global-site/documents/mastercard-rules.pdf" .
+
+ra:RBI_DigitalLending a ra:RegulatoryPolicy ;
+    rdfs:label "RBI Digital Lending Guidelines" ;
+    rdfs:comment """RBI Guidelines on Digital Lending (2022):
+    All communications must be transparent, clearly identify the entity,
+    and provide reason for outreach. Recovery emails must include
+    merchant name, amount, and failure reason.""" ;
+    ra:policySource "RBI/DOR/2022-23/145" ;
+    ra:policyUrl "https://www.rbi.org.in/Scripts/NotificationUser.aspx?Id=12382" .
+
+ra:RBI_MandateFramework a ra:RegulatoryPolicy ;
+    rdfs:label "RBI e-Mandate Framework" ;
+    rdfs:comment """RBI Framework for Processing e-Mandates (2019, updated 2021):
+    - AFA (Additional Factor Authentication) required for mandate registration
+    - Pre-debit notification required 24h before execution
+    - Customer must be able to withdraw mandate anytime
+    - Revoked mandates must NEVER be retried — require fresh re-authorization
+    - Amount limit: ₹1,00,000 for card mandates, ₹2,00,000 for UPI mandates""" ;
+    ra:policySource "DPSS.CO.PD.No.629/02.01.014/2019-20" ;
+    ra:policyUrl "https://www.rbi.org.in/Scripts/NotificationUser.aspx?Id=11668" .
+
+ra:TRAI_DND a ra:RegulatoryPolicy ;
+    rdfs:label "TRAI Do Not Disturb & Communication Timing" ;
+    rdfs:comment """TRAI (Telecom Regulatory Authority of India) regulations:
+    - National Customer Preference Register (NCPR/DND): Must scrub contact lists
+    - Outbound calling hours: 9 AM to 9 PM IST only
+    - Transactional communications: Exempt from DND for existing service issues
+    - Commercial communications: Blocked for DND-registered users
+    - TCCCPR 2018: Pre-registration required before SMS/calls""" ;
+    ra:policySource "TRAI TCCCPR 2018" ;
+    ra:policyUrl "https://www.trai.gov.in/sites/default/files/RegulationUCC19072018.pdf" .
+
+# ── Failure Classes (as named individuals) ───────────────────
+
+ra:FailureClassHARD a owl:NamedIndividual ;
+    rdfs:label "HARD" .
+
+ra:FailureClassSOFT a owl:NamedIndividual ;
+    rdfs:label "SOFT" .
+
+ra:FailureClassMANDATE a owl:NamedIndividual ;
+    rdfs:label "MANDATE" .
+
+ra:FailureClassUNKNOWN a owl:NamedIndividual ;
+    rdfs:label "UNKNOWN" .
+
+# ── Action Types (as named individuals) ──────────────────────
+
+ra:ActionRETRY a owl:NamedIndividual ;
+    rdfs:label "RETRY" .
+
+ra:ActionCONTACT_EMAIL a owl:NamedIndividual ;
+    rdfs:label "CONTACT_EMAIL" .
+
+ra:ActionREAUTH_REQUEST a owl:NamedIndividual ;
+    rdfs:label "REAUTH_REQUEST" .
+
+ra:ActionESCALATE_HUMAN a owl:NamedIndividual ;
+    rdfs:label "ESCALATE_HUMAN" .
+
+# ── Properties: AgentProposal ────────────────────────────────
+
+ra:proposedAction a rdf:Property ;
+    rdfs:domain ra:AgentProposal ;
+    rdfs:range xsd:string ;
+    rdfs:label "proposed action" ;
+    rdfs:comment "The action the agent wants to take: RETRY, CONTACT_EMAIL, REAUTH_REQUEST, ESCALATE_HUMAN." .
+
+ra:confidence a rdf:Property ;
+    rdfs:domain ra:AgentProposal ;
+    rdfs:range xsd:float ;
+    rdfs:label "confidence" .
+
+ra:reasoning a rdf:Property ;
+    rdfs:domain ra:AgentProposal ;
+    rdfs:range xsd:string ;
+    rdfs:label "reasoning" .
+
+ra:retryCount a rdf:Property ;
+    rdfs:domain ra:AgentProposal ;
+    rdfs:range xsd:integer ;
+    rdfs:label "retry count" ;
+    rdfs:comment "Number of retries in the proposed schedule." .
+
+ra:maxRetryHours a rdf:Property ;
+    rdfs:domain ra:AgentProposal ;
+    rdfs:range xsd:float ;
+    rdfs:label "max retry hours" ;
+    rdfs:comment "Latest retry offset in hours." .
+
+# ── Properties: FailureContext ───────────────────────────────
+
+ra:failureClass a rdf:Property ;
+    rdfs:domain ra:FailureContext ;
+    rdfs:range xsd:string ;
+    rdfs:label "failure class" .
+
+ra:classificationConfidence a rdf:Property ;
+    rdfs:domain ra:FailureContext ;
+    rdfs:range xsd:float ;
+    rdfs:label "classification confidence" .
+
+ra:priorRetries a rdf:Property ;
+    rdfs:domain ra:FailureContext ;
+    rdfs:range xsd:integer ;
+    rdfs:label "prior retries" .
+
+ra:priorContacts a rdf:Property ;
+    rdfs:domain ra:FailureContext ;
+    rdfs:range xsd:integer ;
+    rdfs:label "prior contacts" .
+
+ra:customerOptedOut a rdf:Property ;
+    rdfs:domain ra:FailureContext ;
+    rdfs:range xsd:boolean ;
+    rdfs:label "customer opted out" .
+
+ra:hasEmail a rdf:Property ;
+    rdfs:domain ra:FailureContext ;
+    rdfs:range xsd:boolean ;
+    rdfs:label "has email" .
+
+ra:killSwitch a rdf:Property ;
+    rdfs:domain ra:FailureContext ;
+    rdfs:range xsd:boolean ;
+    rdfs:label "kill switch" .
+
+# ── Policy Limits ────────────────────────────────────────────
+
+ra:maxRetries a rdf:Property ;
+    rdfs:domain ra:FailureContext ;
+    rdfs:range xsd:integer ;
+    rdfs:label "max retries" .
+
+ra:retryWindowHours a rdf:Property ;
+    rdfs:domain ra:FailureContext ;
+    rdfs:range xsd:integer ;
+    rdfs:label "retry window hours" .
+
+ra:maxContacts a rdf:Property ;
+    rdfs:domain ra:FailureContext ;
+    rdfs:range xsd:integer ;
+    rdfs:label "max contacts" .
+
+ra:confidenceThreshold a rdf:Property ;
+    rdfs:domain ra:FailureContext ;
+    rdfs:range xsd:float ;
+    rdfs:label "confidence threshold" .
+
+ra:instrumentType a rdf:Property ;
+    rdfs:domain ra:FailureContext ;
+    rdfs:range xsd:string ;
+    rdfs:label "instrument type" ;
+    rdfs:comment "Payment instrument: UPI, CARD, EMANDATE, NETBANKING, WALLET" .
+
+ra:declineCode a rdf:Property ;
+    rdfs:domain ra:FailureContext ;
+    rdfs:range xsd:string ;
+    rdfs:label "decline code" ;
+    rdfs:comment "Raw decline/error code from gateway or issuer." .
+
+ra:amountPaise a rdf:Property ;
+    rdfs:domain ra:FailureContext ;
+    rdfs:range xsd:integer ;
+    rdfs:label "amount in paise" ;
+    rdfs:comment "Transaction amount in paise (1/100 of INR)." .
+
+# ── Policy Reference Properties ──────────────────────────────
+
+ra:policySource a rdf:Property ;
+    rdfs:domain ra:RegulatoryPolicy ;
+    rdfs:range xsd:string ;
+    rdfs:label "policy source" ;
+    rdfs:comment "Official circular/document reference number." .
+
+ra:policyUrl a rdf:Property ;
+    rdfs:domain ra:RegulatoryPolicy ;
+    rdfs:range xsd:anyURI ;
+    rdfs:label "policy URL" ;
+    rdfs:comment "URL to the official policy document." .
+
+ra:enforcedBy a rdf:Property ;
+    rdfs:range ra:RegulatoryPolicy ;
+    rdfs:label "enforced by" ;
+    rdfs:comment "Links a SHACL shape to the regulatory policy it enforces." .
+
+# ── Linking ──────────────────────────────────────────────────
+
+ra:hasContext a rdf:Property ;
+    rdfs:domain ra:AgentProposal ;
+    rdfs:range ra:FailureContext ;
+    rdfs:label "has context" .

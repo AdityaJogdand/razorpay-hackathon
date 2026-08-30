@@ -16,7 +16,6 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from email.mime.text import MIMEText
 
-import httpx
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -56,7 +55,7 @@ async def mock_gateway_retry(
     """
     # Deterministic mock: succeed if hash of txn_id is even
     import hashlib
-    h = int(hashlib.md5(f"{transaction_id}:{idempotency_key}".encode()).hexdigest(), 16)
+    h = int(hashlib.sha256(f"{transaction_id}:{idempotency_key}".encode()).hexdigest(), 16)
     success = (h % 3) != 0  # ~67% success rate
 
     if success:
@@ -89,7 +88,7 @@ def send_email(
     Falls back to mock if Gmail credentials aren't configured.
     """
     if not settings.gmail_user or not settings.gmail_app_password:
-        logger.info(f"Gmail not configured — mock sending email to {to}")
+        logger.info("Gmail not configured — using mock email sender")
         return {
             "status": "sent_mock",
             "message_id": f"mock_{uuid.uuid4().hex[:12]}",

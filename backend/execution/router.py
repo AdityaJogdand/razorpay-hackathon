@@ -1,11 +1,14 @@
 """API routes for execution status and manual triggers."""
 
-from fastapi import APIRouter, Depends, HTTPException
+import uuid
+
+from fastapi import APIRouter, Depends
 from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.core.database import get_db
-from backend.models.enums import ActionStatus, ActionType
+from backend.core.security import validate_uuid
+from backend.models.enums import ActionStatus
 from backend.models.tables import Action
 
 router = APIRouter(prefix="/execution", tags=["execution"])
@@ -45,7 +48,7 @@ async def get_actions_for_event(
     db: AsyncSession = Depends(get_db),
 ):
     """Get all actions for a failure event."""
-    import uuid
+    validate_uuid(event_id)
     result = await db.execute(
         select(Action)
         .where(Action.failure_event_id == uuid.UUID(event_id))

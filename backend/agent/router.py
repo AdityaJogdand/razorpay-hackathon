@@ -16,15 +16,16 @@ import uuid
 import logging
 from datetime import datetime, timedelta, timezone
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.core.database import get_db
 from backend.models.enums import ActionType, ActionStatus, LedgerEventType
-from backend.models.tables import FailureEvent, Action, RecoveryPlan, ConfigVersion, Suppression
+from backend.models.tables import FailureEvent, Action, ConfigVersion, Suppression
 from backend.agent.service import get_agent_proposal
-from backend.guardrail.engine import validate_proposal
+from backend.core.security import validate_uuid
+from backend.guardrail.shacl_engine import validate_proposal_shacl, get_shacl_report
 from backend.execution.service import execute_action
 from backend.ledger.service import append as ledger_append
 from backend.dashboard.ws import notify_dashboard_update
@@ -45,6 +46,7 @@ async def process_with_agent(
     Agent reasons → Guardrail validates → Execution delivers.
     """
     # ── Load failure event ──
+    validate_uuid(event_id)
     event_uuid = uuid.UUID(event_id)
     result = await db.execute(
         select(FailureEvent).where(FailureEvent.id == event_uuid)
@@ -118,8 +120,8 @@ async def process_with_agent(
         },
     )
 
-    # ── Step 2: Guardrail validates ──
-    guardrail_result = validate_proposal(
+    # ── Step 2: SHACL Guardrail validates ──
+    guardrail_kwargs = dict(
         proposal=proposal,
         failure_class=event.failure_class.value,
         classification_confidence=event.classification_confidence or 0.0,
@@ -133,9 +135,16 @@ async def process_with_agent(
         opted_out=False,  # would come from customer profile in production
         has_email=bool(event.customer_email),
         kill_switch=config.kill_switch,
+        decline_code=event.raw_error_code or "",
+        instrument_type=event.instrument_type.value if event.instrument_type else "",
+        amount_paise=event.amount_paise,
     )
+    guardrail_result = validate_proposal_shacl(**guardrail_kwargs)
 
-    # ── Audit: log guardrail result ──
+    # Get the raw SHACL report for audit
+    shacl_report = get_shacl_report(**guardrail_kwargs)
+
+    # ── Audit: log guardrail result with SHACL report ──
     await ledger_append(
         db, event.merchant_id, LedgerEventType.GUARDRAIL_RESULT,
         event.id, "guardrail_result",
@@ -153,6 +162,14 @@ async def process_with_agent(
                 }
                 for c in guardrail_result.checks
             ],
+            "shacl": {
+                "conforms": shacl_report["conforms"],
+                "engine": shacl_report["engine"],
+                "ontology": shacl_report["ontology"],
+                "shapes": shacl_report["shapes"],
+                "data_graph_turtle": shacl_report["data_graph_turtle"],
+                "results_text": shacl_report["results_text"],
+            },
         },
     )
 
@@ -312,6 +329,12 @@ async def process_with_agent(
                 {"rule": c.rule_name, "passed": c.passed, "detail": c.detail}
                 for c in guardrail_result.checks
             ],
+            "shacl": {
+                "conforms": shacl_report["conforms"],
+                "engine": "pyshacl",
+                "ontology": "RDF/OWL",
+                "shapes": "SHACL",
+            },
         },
         "execution": execution_results,
     }
@@ -320,7 +343,7 @@ async def process_with_agent(
 @router.post("/batch-process")
 async def batch_process_with_agent(
     merchant_id: str = "merchant_demo_001",
-    limit: int = 10,
+    limit: int = Query(10, le=50),
     db: AsyncSession = Depends(get_db),
 ):
     """
@@ -343,10 +366,10 @@ async def batch_process_with_agent(
             single_result = await process_with_agent(str(event.id), db)
             results.append(single_result)
         except Exception as e:
-            logger.error(f"Agent processing failed for {event.id}: {e}")
+            logger.error(f"Agent processing failed for event: {e}")
             results.append({
                 "event_id": str(event.id),
-                "error": str(e),
+                "error": "Processing failed",
             })
 
     return {

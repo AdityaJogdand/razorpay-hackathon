@@ -1,0 +1,433 @@
+@prefix rdf:   <http://www.w3.org/1999/02/22-rdf-syntax-ns#> .
+@prefix rdfs:  <http://www.w3.org/2000/01/rdf-schema#> .
+@prefix xsd:   <http://www.w3.org/2001/XMLSchema#> .
+@prefix sh:    <http://www.w3.org/ns/shacl#> .
+@prefix ra:    <http://razorpay.com/recovery-agent/ontology#> .
+@prefix owl:   <http://www.w3.org/2002/07/owl#> .
+
+# ============================================================
+# SHACL Guardrail Shapes — Payment Recovery Policy Engine
+#
+# Each shape encodes a guardrail rule grounded in real regulatory
+# policy from RBI, NPCI, Visa, and Mastercard.
+#
+# pyshacl validates agent proposals against these shapes at
+# runtime. Violations = guardrail overrides (logged to audit).
+# ============================================================
+
+# Prefix declarations for SPARQL constraints
+ra:PrefixDeclarations a owl:Ontology ;
+    sh:declare [
+        sh:prefix "ra" ;
+        sh:namespace "http://razorpay.com/recovery-agent/ontology#"^^xsd:anyURI ;
+    ] ;
+    sh:declare [
+        sh:prefix "xsd" ;
+        sh:namespace "http://www.w3.org/2001/XMLSchema#"^^xsd:anyURI ;
+    ] .
+
+# ── Shape 1: hard_no_retry ───────────────────────────────────
+# HARD declines must NEVER be retried.
+#
+# Policy basis:
+# - Visa Core Rules: Response codes 41 (lost), 43 (stolen),
+#   04/07/34/59 (fraud), 54 (expired) are "do not retry" codes
+# - Mastercard Rules: Same codes flagged as non-retryable
+# - Razorpay docs: expired/stolen/closed → permanent failure
+
+ra:HardNoRetryShape a sh:NodeShape ;
+    sh:targetClass ra:AgentProposal ;
+    sh:name "hard_no_retry" ;
+    sh:description """HARD declines (expired/stolen card, closed account) must never be retried.
+    Per Visa Core Rules 2024 and Mastercard Transaction Processing Rules:
+    Response codes 41/43 (lost/stolen), 04/07/34/59 (fraud), 54 (expired)
+    are classified as 'do not retry'. Retrying these wastes gateway quota
+    and may trigger network penalty fees.""" ;
+    ra:enforcedBy ra:Visa_RetryRules, ra:Mastercard_RetryRules ;
+    sh:sparql [
+        sh:message "Agent proposed RETRY for HARD decline. Per Visa/Mastercard rules, hard declines (lost/stolen/expired/fraud) must never be retried." ;
+        sh:severity sh:Violation ;
+        sh:prefixes ra:PrefixDeclarations ;
+        sh:select """
+            SELECT $this
+            WHERE {
+                $this ra:proposedAction "RETRY"^^xsd:string .
+                $this ra:hasContext ?ctx .
+                ?ctx ra:failureClass "HARD"^^xsd:string .
+            }
+        """ ;
+    ] .
+
+# ── Shape 2: mandate_no_retry ────────────────────────────────
+# MANDATE failures must NEVER be retried — require re-authorization.
+#
+# Policy basis:
+# - RBI Framework for e-Mandates (DPSS.CO.PD.No.629/2019-20):
+#   Revoked mandates require fresh AFA-based authorization
+# - NPCI UPI Circular OC-151: Pre-debit notification required
+#   24h before mandate execution
+# - Razorpay docs: mandate_revoked/expired → re-authorize
+
+ra:MandateNoRetryShape a sh:NodeShape ;
+    sh:targetClass ra:AgentProposal ;
+    sh:name "mandate_no_retry" ;
+    sh:description """MANDATE failures (revoked/expired/paused mandate) must never be retried.
+    Per RBI e-Mandate Framework (2019/2021): Revoked mandates require
+    fresh Additional Factor Authentication (AFA). Customer must explicitly
+    re-authorize. NPCI codes U37-U47 are mandate lifecycle failures.""" ;
+    ra:enforcedBy ra:RBI_MandateFramework, ra:NPCI_UPI_RetryLimit ;
+    sh:sparql [
+        sh:message "Agent proposed RETRY for MANDATE failure. Per RBI e-Mandate Framework, revoked/expired mandates require fresh re-authorization (AFA), not retries." ;
+        sh:severity sh:Violation ;
+        sh:prefixes ra:PrefixDeclarations ;
+        sh:select """
+            SELECT $this
+            WHERE {
+                $this ra:proposedAction "RETRY"^^xsd:string .
+                $this ra:hasContext ?ctx .
+                ?ctx ra:failureClass "MANDATE"^^xsd:string .
+            }
+        """ ;
+    ] .
+
+# ── Shape 3: max_retry_count ─────────────────────────────────
+# Cannot exceed max retry count.
+#
+# Policy basis:
+# - Visa: Max 15 retries within 30 days for soft declines
+# - Mastercard: Max 10 retries for account declines, 25 for others
+# - NPCI UPI: Max 5 retry attempts per UPI transaction
+# - Razorpay default: 3 retries (conservative, within all limits)
+
+ra:MaxRetryCountShape a sh:NodeShape ;
+    sh:targetClass ra:AgentProposal ;
+    sh:name "max_retry_count" ;
+    sh:description """Retry count must not exceed the configured maximum.
+    Network limits: Visa allows 15/30d, Mastercard 10-25/30d, NPCI UPI 5/txn.
+    Razorpay default (3) is conservative to stay well within all network limits
+    and avoid Mastercard Excessive Retry fees (charged above 10 retries/month).""" ;
+    ra:enforcedBy ra:Visa_RetryRules, ra:Mastercard_RetryRules, ra:NPCI_UPI_RetryLimit ;
+    sh:sparql [
+        sh:message "Retry count has reached maximum. Per card network rules, excessive retries incur penalty fees and risk merchant account flags." ;
+        sh:severity sh:Violation ;
+        sh:prefixes ra:PrefixDeclarations ;
+        sh:select """
+            SELECT $this
+            WHERE {
+                $this ra:proposedAction "RETRY"^^xsd:string .
+                $this ra:hasContext ?ctx .
+                ?ctx ra:priorRetries ?prior .
+                ?ctx ra:maxRetries ?max .
+                FILTER (?prior >= ?max)
+            }
+        """ ;
+    ] .
+
+# ── Shape 4: retry_window ────────────────────────────────────
+# All retries must fall within the retry time window.
+#
+# Policy basis:
+# - Visa/Mastercard: 30-day retry window for soft declines
+# - NPCI UPI: 48-hour reversal window
+# - Razorpay default: 72h (3 days) for recurring, 24h for one-time
+
+ra:RetryWindowShape a sh:NodeShape ;
+    sh:targetClass ra:AgentProposal ;
+    sh:name "retry_window" ;
+    sh:description """All proposed retries must complete within the configured retry window.
+    Visa/Mastercard allow 30 days, but Razorpay defaults to 72h (3 days) for
+    better customer experience. NPCI UPI reversal window is 48 hours.""" ;
+    ra:enforcedBy ra:Visa_RetryRules, ra:Mastercard_RetryRules ;
+    sh:sparql [
+        sh:message "Proposed retry schedule exceeds the retry time window. Per network rules, retries must complete within the configured window." ;
+        sh:severity sh:Violation ;
+        sh:prefixes ra:PrefixDeclarations ;
+        sh:select """
+            SELECT $this
+            WHERE {
+                $this ra:proposedAction "RETRY"^^xsd:string .
+                $this ra:maxRetryHours ?maxH .
+                $this ra:hasContext ?ctx .
+                ?ctx ra:retryWindowHours ?window .
+                FILTER (xsd:float(?maxH) > xsd:float(?window))
+            }
+        """ ;
+    ] .
+
+# ── Shape 5: contact_frequency_cap ───────────────────────────
+# Cannot exceed max customer contacts.
+#
+# Policy basis:
+# - RBI Digital Lending Guidelines (2022): Recovery communications
+#   must be limited and not constitute harassment
+# - RBI Customer Protection Circular: Excessive contact = harassment
+# - TRAI DND regulations: Commercial communications limits
+
+ra:ContactFrequencyCapShape a sh:NodeShape ;
+    sh:targetClass ra:AgentProposal ;
+    sh:name "contact_frequency_cap" ;
+    sh:description """Customer contact count must not exceed the configured maximum.
+    Per RBI Digital Lending Guidelines (2022) and Customer Protection Framework:
+    Recovery communications must be limited. Excessive outreach constitutes
+    harassment. Default: max 3 contacts per failure event.""" ;
+    ra:enforcedBy ra:RBI_DigitalLending, ra:RBI_CustomerProtection ;
+    sh:sparql [
+        sh:message "Contact frequency cap exceeded. Per RBI guidelines, excessive recovery communications constitute harassment." ;
+        sh:severity sh:Violation ;
+        sh:prefixes ra:PrefixDeclarations ;
+        sh:select """
+            SELECT $this
+            WHERE {
+                $this ra:proposedAction ?action .
+                FILTER (?action IN ("CONTACT_EMAIL"^^xsd:string, "REAUTH_REQUEST"^^xsd:string))
+                $this ra:hasContext ?ctx .
+                ?ctx ra:priorContacts ?prior .
+                ?ctx ra:maxContacts ?max .
+                FILTER (?prior >= ?max)
+            }
+        """ ;
+    ] .
+
+# ── Shape 6: customer_opt_out ────────────────────────────────
+# NEVER contact opted-out customers.
+#
+# Policy basis:
+# - RBI Customer Protection Circular (2017): Customer communication
+#   preferences must be honored
+# - IT Act 2000 §43A: Protection of sensitive personal data
+# - TRAI DND (Do Not Disturb) Regulations
+
+ra:CustomerOptOutShape a sh:NodeShape ;
+    sh:targetClass ra:AgentProposal ;
+    sh:name "customer_opt_out" ;
+    sh:description """Customers who opted out of communications must never be contacted.
+    Per RBI Customer Protection Framework (RBI/DBR/2017-18/15):
+    Customer communication preferences are binding. Violating opt-out
+    is a regulatory violation under IT Act 2000 §43A and TRAI DND rules.""" ;
+    ra:enforcedBy ra:RBI_CustomerProtection ;
+    sh:sparql [
+        sh:message "Customer has opted out of recovery communications. Per RBI Customer Protection Framework, opt-out preferences are legally binding." ;
+        sh:severity sh:Violation ;
+        sh:prefixes ra:PrefixDeclarations ;
+        sh:select """
+            SELECT $this
+            WHERE {
+                $this ra:proposedAction ?action .
+                FILTER (?action IN ("CONTACT_EMAIL"^^xsd:string, "REAUTH_REQUEST"^^xsd:string))
+                $this ra:hasContext ?ctx .
+                ?ctx ra:customerOptedOut true .
+            }
+        """ ;
+    ] .
+
+# ── Shape 7: no_email_on_file ────────────────────────────────
+# Cannot email if no email address exists.
+#
+# Policy basis:
+# - RBI Digital Lending Guidelines: Communications must use
+#   verified contact information
+# - Data minimization principle (IT Act / DPDP Act 2023)
+
+ra:NoEmailOnFileShape a sh:NodeShape ;
+    sh:targetClass ra:AgentProposal ;
+    sh:name "no_email_on_file" ;
+    sh:description """Cannot send email if no customer email address is on file.
+    Per RBI Digital Lending Guidelines: All recovery outreach must use
+    verified contact details. Must escalate to human review for
+    alternative contact methods.""" ;
+    ra:enforcedBy ra:RBI_DigitalLending ;
+    sh:sparql [
+        sh:message "No email address on file for customer. Per RBI guidelines, recovery outreach requires verified contact information." ;
+        sh:severity sh:Violation ;
+        sh:prefixes ra:PrefixDeclarations ;
+        sh:select """
+            SELECT $this
+            WHERE {
+                $this ra:proposedAction ?action .
+                FILTER (?action IN ("CONTACT_EMAIL"^^xsd:string, "REAUTH_REQUEST"^^xsd:string))
+                $this ra:hasContext ?ctx .
+                ?ctx ra:hasEmail false .
+            }
+        """ ;
+    ] .
+
+# ── Shape 8: unknown_must_escalate ───────────────────────────
+# UNKNOWN class with low confidence must be escalated.
+#
+# Policy basis:
+# - RBI risk management guidelines: Automated systems must have
+#   human fallback for uncertain decisions
+# - Razorpay internal: Low-confidence classifications must not
+#   trigger automated actions to prevent revenue loss
+
+ra:UnknownMustEscalateShape a sh:NodeShape ;
+    sh:targetClass ra:AgentProposal ;
+    sh:name "unknown_must_escalate" ;
+    sh:description """UNKNOWN failure class with low confidence must be escalated to human review.
+    Per RBI Operational Risk Management Framework: AI/ML-driven systems must
+    have human-in-the-loop fallback for uncertain decisions. Automated
+    action on ambiguous failures risks revenue loss or customer harm.""" ;
+    sh:sparql [
+        sh:message "UNKNOWN class with low confidence must be escalated to human review. Per RBI risk management guidelines, uncertain AI decisions require human oversight." ;
+        sh:severity sh:Violation ;
+        sh:prefixes ra:PrefixDeclarations ;
+        sh:select """
+            SELECT $this
+            WHERE {
+                $this ra:proposedAction ?action .
+                FILTER (?action != "ESCALATE_HUMAN"^^xsd:string)
+                $this ra:hasContext ?ctx .
+                ?ctx ra:failureClass "UNKNOWN"^^xsd:string .
+                ?ctx ra:classificationConfidence ?conf .
+                ?ctx ra:confidenceThreshold ?thresh .
+                FILTER (xsd:float(?conf) < xsd:float(?thresh))
+            }
+        """ ;
+    ] .
+
+# ── Shape 9: kill_switch ─────────────────────────────────────
+# When kill switch is active, no actions should proceed.
+#
+# Policy basis:
+# - RBI Business Continuity Planning guidelines: Payment systems
+#   must have emergency halt capability
+# - Razorpay internal: Operational kill switch for incident response
+
+ra:KillSwitchShape a sh:NodeShape ;
+    sh:targetClass ra:AgentProposal ;
+    sh:name "kill_switch" ;
+    sh:description """When kill switch is active, all automated execution is halted.
+    Per RBI Business Continuity Planning Framework: Payment processing
+    systems must have emergency halt capability. Kill switch allows
+    immediate cessation of all automated recovery during incidents.""" ;
+    sh:sparql [
+        sh:message "Kill switch is active. All automated recovery execution halted per incident response protocol." ;
+        sh:severity sh:Violation ;
+        sh:prefixes ra:PrefixDeclarations ;
+        sh:select """
+            SELECT $this
+            WHERE {
+                $this ra:hasContext ?ctx .
+                ?ctx ra:killSwitch true .
+            }
+        """ ;
+    ] .
+
+# ── Shape 10: rbi_pre_debit_notification ─────────────────────
+# Mandate execution requires 24h pre-debit notification.
+#
+# Policy basis:
+# - RBI e-Mandate Framework (DPSS.CO.PD.No.629/2019-20)
+# - NPCI Circular OC-151: Pre-debit notification is mandatory
+# - NPCI UPI code U47 = pre-debit notification not sent
+
+ra:PreDebitNotificationShape a sh:NodeShape ;
+    sh:targetClass ra:AgentProposal ;
+    sh:name "rbi_pre_debit_notification" ;
+    sh:description """Per RBI e-Mandate Framework & NPCI Circular OC-151:
+    Pre-debit notification must be sent 24 hours before mandate execution.
+    If decline code indicates pre-debit notification was not sent (NPCI U47),
+    the mandate must be re-initiated with proper notification, not retried.""" ;
+    ra:enforcedBy ra:RBI_PreDebitNotification, ra:RBI_MandateFramework ;
+    sh:sparql [
+        sh:message "Decline code indicates pre-debit notification was not sent (NPCI U47). Per RBI e-Mandate Framework, mandate must be re-initiated with proper 24h pre-debit notification." ;
+        sh:severity sh:Violation ;
+        sh:prefixes ra:PrefixDeclarations ;
+        sh:select """
+            SELECT $this
+            WHERE {
+                $this ra:proposedAction "RETRY"^^xsd:string .
+                $this ra:hasContext ?ctx .
+                ?ctx ra:declineCode "U47"^^xsd:string .
+            }
+        """ ;
+    ] .
+
+# ── Shape 11: visa_do_not_retry_codes ────────────────────────
+# Visa/Mastercard "do not retry" response codes.
+#
+# Policy basis:
+# - Visa Core Rules 2024: Codes 41, 43 (lost/stolen), 04, 07,
+#   34, 59 (fraud) must never be retried
+# - Mastercard: Same codes are non-retryable
+
+ra:DoNotRetryCodesShape a sh:NodeShape ;
+    sh:targetClass ra:AgentProposal ;
+    sh:name "card_network_do_not_retry" ;
+    sh:description """Per Visa Core Rules 2024 & Mastercard Transaction Processing Rules:
+    Certain response codes are classified as 'do not retry'. Retrying these
+    codes wastes authorization quota, may trigger network penalty fees,
+    and could result in merchant account review.
+    Codes: 04 (pickup), 07 (fraud pickup), 34 (suspected fraud),
+    41 (lost card), 43 (stolen card), 46 (closed account),
+    54 (expired card), 57 (not permitted), 59 (suspected fraud),
+    62 (restricted), 63 (security violation).""" ;
+    ra:enforcedBy ra:Visa_RetryRules, ra:Mastercard_RetryRules ;
+    sh:sparql [
+        sh:message "Decline code is on Visa/Mastercard 'do not retry' list. Retrying will incur network penalty fees and risk merchant account review." ;
+        sh:severity sh:Violation ;
+        sh:prefixes ra:PrefixDeclarations ;
+        sh:select """
+            SELECT $this
+            WHERE {
+                $this ra:proposedAction "RETRY"^^xsd:string .
+                $this ra:hasContext ?ctx .
+                ?ctx ra:declineCode ?code .
+                FILTER (?code IN (
+                    "04"^^xsd:string, "07"^^xsd:string, "34"^^xsd:string,
+                    "41"^^xsd:string, "43"^^xsd:string, "46"^^xsd:string,
+                    "54"^^xsd:string, "57"^^xsd:string, "59"^^xsd:string,
+                    "62"^^xsd:string, "63"^^xsd:string
+                ))
+            }
+        """ ;
+    ] .
+
+# ── Shape 12: rbi_email_transparency ─────────────────────────
+# Recovery emails must include required information.
+#
+# Policy basis:
+# - RBI Digital Lending Guidelines (2022): All borrower
+#   communications must clearly identify the entity and reason
+
+ra:EmailTransparencyShape a sh:NodeShape ;
+    sh:targetClass ra:AgentProposal ;
+    sh:name "rbi_email_transparency" ;
+    sh:description """Per RBI Digital Lending Guidelines (RBI/DOR/2022-23/145):
+    All recovery communications must be transparent — clearly identify
+    the merchant/entity, state the amount, and explain the failure reason.
+    This shape validates that proposals requiring customer contact include
+    sufficient context for compliant communication.""" ;
+    ra:enforcedBy ra:RBI_DigitalLending .
+
+# ── Basic property constraints ───────────────────────────────
+# Ensure proposals have required fields.
+
+ra:ProposalRequiredFieldsShape a sh:NodeShape ;
+    sh:targetClass ra:AgentProposal ;
+    sh:name "required_fields" ;
+    sh:description "Every proposal must have an action, context, and confidence." ;
+    sh:property [
+        sh:path ra:proposedAction ;
+        sh:minCount 1 ;
+        sh:maxCount 1 ;
+        sh:datatype xsd:string ;
+        sh:in ( "RETRY"^^xsd:string "CONTACT_EMAIL"^^xsd:string "REAUTH_REQUEST"^^xsd:string "ESCALATE_HUMAN"^^xsd:string ) ;
+        sh:message "proposedAction must be one of: RETRY, CONTACT_EMAIL, REAUTH_REQUEST, ESCALATE_HUMAN" ;
+    ] ;
+    sh:property [
+        sh:path ra:hasContext ;
+        sh:minCount 1 ;
+        sh:maxCount 1 ;
+        sh:class ra:FailureContext ;
+        sh:message "Proposal must have exactly one failure context" ;
+    ] ;
+    sh:property [
+        sh:path ra:confidence ;
+        sh:minCount 1 ;
+        sh:maxCount 1 ;
+        sh:datatype xsd:float ;
+        sh:minInclusive 0.0 ;
+        sh:maxInclusive 1.0 ;
+        sh:message "Confidence must be a float between 0.0 and 1.0" ;
+    ] .

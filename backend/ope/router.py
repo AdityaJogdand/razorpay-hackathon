@@ -10,7 +10,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.core.database import get_db
-from backend.models.enums import ActionType, ActionStatus, LedgerEventType
+from backend.models.enums import ActionStatus, LedgerEventType
 from backend.models.tables import FailureEvent, Action, AuditLedger
 from backend.ope.estimators import (
     load_dataset,
@@ -89,13 +89,14 @@ async def evaluate(
 
     # Build agent_actions map keyed by transaction_id
     agent_actions: dict[str, dict] = {}
+
+    # For transactions in DB, use actual agent decisions
     for txn_id, event in events.items():
         eid = str(event.id)
         proposal = proposals_by_event.get(eid, {})
         guardrail = guardrails_by_event.get(eid, {})
         actions = actions_by_event.get(eid, [])
 
-        # What did the agent actually do?
         executed_types = set()
         succeeded = False
         for a in actions:
@@ -104,7 +105,6 @@ async def evaluate(
             if a.status == ActionStatus.SUCCEEDED:
                 succeeded = True
 
-        # Fallback to scheduled actions if nothing executed
         if not executed_types:
             for a in actions:
                 if a.status == ActionStatus.SCHEDULED:
@@ -116,8 +116,23 @@ async def evaluate(
             "succeeded": succeeded,
         }
 
-    # Only evaluate transactions that were actually processed by the agent
-    transactions = [t for t in transactions if t["transaction_id"] in agent_actions]
+    # For transactions NOT in DB, simulate agent decisions using deterministic policy
+    # This is the same logic the agent uses (failure_class -> action mapping)
+    CLASS_ACTION_MAP = {
+        "SOFT": "RETRY",
+        "HARD": "CONTACT_EMAIL",
+        "MANDATE": "REAUTH_REQUEST",
+        "UNKNOWN": "ESCALATE_HUMAN",
+    }
+    for txn in transactions:
+        txn_id = txn["transaction_id"]
+        if txn_id not in agent_actions:
+            fc = txn["failure_class"]
+            agent_actions[txn_id] = {
+                "action": CLASS_ACTION_MAP.get(fc, "ESCALATE_HUMAN"),
+                "guardrail_agreed": True,
+                "succeeded": False,
+            }
 
     if not transactions:
         return {

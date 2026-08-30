@@ -8,6 +8,15 @@ export interface GuardrailCheck {
   detail?: string;
 }
 
+export interface ShaclValidation {
+  conforms: boolean;
+  engine: string;
+  ontology: string;
+  shapes: string;
+  data_graph_turtle?: string;
+  results_text?: string;
+}
+
 export interface Transaction {
   id: string;
   amount: number;
@@ -26,6 +35,7 @@ export interface Transaction {
   guardrail_status: GuardrailStatus;
   guardrail_checks: GuardrailCheck[];
   guardrail_override_reason?: string;
+  shacl?: ShaclValidation;
   outcome: Outcome;
   outcome_detail: string;
   email_draft?: {
