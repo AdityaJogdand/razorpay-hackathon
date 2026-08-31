@@ -39,7 +39,7 @@ export interface DashboardEvent {
     } | null;
   };
   policy_action: string;
-  outcome: 'recovered' | 'failed' | 'pending' | 'suppressed';
+  outcome: 'recovered' | 'failed' | 'pending' | 'suppressed' | 'contacted' | 'escalated';
   outcome_detail: string;
   recovered_amount: number;
   actions: Array<{
@@ -146,5 +146,148 @@ export async function fetchExceptionResolutions(): Promise<{ resolutions: Except
 
 export async function fetchOPE(params?: { method?: string; split?: string }): Promise<OPEResult> {
   const { data } = await api.get('/ope/evaluate', { params });
+  return data;
+}
+
+export async function runAgentPipeline(eventId: string): Promise<Record<string, unknown>> {
+  const { data } = await api.post(`/agent/process/${eventId}`);
+  return data;
+}
+
+export async function approveEmail(actionId: string): Promise<{ action_id: string; status: string; detail: string }> {
+  const { data } = await api.post(`/agent/approve-email/${actionId}`);
+  return data;
+}
+
+export async function updateEmailDraft(actionId: string, draft: { subject: string; body: string }): Promise<{ action_id: string; subject: string; body: string }> {
+  const { data } = await api.put(`/agent/email-draft/${actionId}`, draft);
+  return data;
+}
+
+export async function denyEmail(actionId: string): Promise<{ action_id: string; status: string; detail: string }> {
+  const { data } = await api.post(`/agent/deny-email/${actionId}`);
+  return data;
+}
+
+export interface SimulatePaymentRequest {
+  failure_type: 'SOFT' | 'HARD' | 'MANDATE' | 'UNKNOWN';
+  mandate_sub_type?: string;
+  amount_paise: number;
+  customer_email: string;
+}
+
+export async function simulatePayment(req: SimulatePaymentRequest): Promise<Record<string, unknown>> {
+  const { data } = await api.post('/simulate/payment', req);
+  return data;
+}
+
+export async function simulateRecovery(eventId: string): Promise<{
+  event_id: string;
+  transaction_id: string;
+  amount_paise: number;
+  amount_display: string;
+  status: string;
+  payment_id: string;
+  failure_class: string;
+  detail: string;
+}> {
+  const { data } = await api.post(`/simulate/recover/${eventId}`);
+  return data;
+}
+
+export interface GuardrailRule {
+  name: string;
+  description: string;
+  policy: string;
+}
+
+export interface GuardrailInfo {
+  engine: string;
+  ontology_format: string;
+  shapes_format: string;
+  rules: GuardrailRule[];
+  regulatory_sources: Array<{ name: string; ref: string }>;
+}
+
+// Mandate Sequencer API
+export interface MandateSequenceStep {
+  step_number: number;
+  step_type: string;
+  description: string;
+  delay_hours: number;
+  status: 'PENDING' | 'IN_PROGRESS' | 'COMPLETED' | 'SKIPPED' | 'FAILED';
+  regulatory_basis: string;
+}
+
+export interface MandateSequence {
+  event_id: string;
+  transaction_id: string;
+  customer_id: string;
+  customer_email: string;
+  amount_paise: number;
+  decline_code: string;
+  decline_reason: string;
+  failed_at: string;
+  sub_type: string;
+  sub_type_label: string;
+  retryable: boolean;
+  max_attempts: number;
+  description: string;
+  regulatory_note: string;
+  current_step: number;
+  total_steps: number;
+  steps: MandateSequenceStep[];
+  actions: Array<{
+    id: string;
+    action_type: string;
+    status: string;
+    scheduled_at: string | null;
+    executed_at: string | null;
+    outcome: Record<string, unknown> | null;
+  }>;
+  agent_reasoning?: string;
+}
+
+export interface MandateStats {
+  total_mandate_events: number;
+  total_amount_paise: number;
+  retryable_count: number;
+  non_retryable_count: number;
+  by_sub_type: Record<string, { count: number; label: string; retryable: boolean }>;
+  action_status: Record<string, number>;
+}
+
+export async function fetchMandateSequences(params?: { limit?: number }): Promise<{ sequences: MandateSequence[]; total: number }> {
+  const { data } = await api.get('/mandate/sequences', { params });
+  return data;
+}
+
+export async function fetchMandateSequence(eventId: string): Promise<MandateSequence> {
+  const { data } = await api.get(`/mandate/sequence/${eventId}`);
+  return data;
+}
+
+export async function createMandateSequence(eventId: string): Promise<Record<string, unknown>> {
+  const { data } = await api.post(`/mandate/sequence/${eventId}`);
+  return data;
+}
+
+export async function advanceMandateSequence(eventId: string): Promise<Record<string, unknown>> {
+  const { data } = await api.post(`/mandate/advance/${eventId}`);
+  return data;
+}
+
+export async function fetchMandateStats(): Promise<MandateStats> {
+  const { data } = await api.get('/mandate/stats');
+  return data;
+}
+
+export async function fetchGuardrailInfo(): Promise<GuardrailInfo> {
+  const { data } = await api.get('/guardrail/info');
+  return data;
+}
+
+export async function fetchLedgerCount(): Promise<{ merchant_id: string; count: number }> {
+  const { data } = await api.get('/ledger/count');
   return data;
 }

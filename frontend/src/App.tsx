@@ -6,6 +6,9 @@ import DecisionTrace from './pages/DecisionTrace';
 import ExceptionQueue from './pages/ExceptionQueue';
 import StoppingRuleAudit from './pages/StoppingRuleAudit';
 import EmailOutreach from './pages/EmailOutreach';
+import PaymentSimulator from './pages/PaymentSimulator';
+import AuditLedger from './pages/AuditLedger';
+import MandateSequencer from './pages/MandateSequencer';
 
 const themeConfig = {
   token: {
@@ -41,6 +44,9 @@ function App() {
             <Route path="/exceptions" element={<ExceptionQueue />} />
             <Route path="/rules" element={<StoppingRuleAudit />} />
             <Route path="/emails" element={<EmailOutreach />} />
+            <Route path="/simulate" element={<PaymentSimulator />} />
+            <Route path="/ledger" element={<AuditLedger />} />
+            <Route path="/mandates" element={<MandateSequencer />} />
           </Route>
         </Routes>
       </BrowserRouter>

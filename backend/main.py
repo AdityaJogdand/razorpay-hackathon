@@ -14,6 +14,8 @@ from backend.dashboard.router import router as dashboard_router
 from backend.guardrail.router import router as guardrail_router
 from backend.dashboard.ws import dashboard_ws
 from backend.ope.router import router as ope_router
+from backend.simulate.router import router as simulate_router
+from backend.mandate.router import router as mandate_router
 
 
 @asynccontextmanager
@@ -47,7 +49,7 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=["http://localhost:5173", "http://localhost:5174", "http://localhost:5175"],
     allow_credentials=True,
-    allow_methods=["GET", "POST"],
+    allow_methods=["GET", "POST", "PUT"],
     allow_headers=["Content-Type", "X-API-Key", "X-Webhook-Signature"],
 )
 
@@ -59,6 +61,8 @@ app.include_router(execution_router)
 app.include_router(dashboard_router)
 app.include_router(guardrail_router)
 app.include_router(ope_router)
+app.include_router(simulate_router)
+app.include_router(mandate_router)
 
 
 @app.websocket("/ws/dashboard")

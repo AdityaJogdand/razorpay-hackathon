@@ -197,7 +197,7 @@ export default function ExceptionQueue() {
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [resolving, setResolving] = useState<string | null>(null);
 
-  useEffect(() => {
+  const loadData = () => {
     Promise.all([
       fetchDashboardEvents({ limit: 200, failure_class: 'UNKNOWN' }),
       fetchExceptionResolutions(),
@@ -212,6 +212,22 @@ export default function ExceptionQueue() {
       })
       .catch((err) => setError(err instanceof Error ? err.message : 'Failed to load'))
       .finally(() => setLoading(false));
+  };
+
+  useEffect(() => {
+    loadData();
+
+    const wsUrl = `${(import.meta.env.VITE_API_URL || 'http://localhost:8000').replace(/^http/, 'ws')}/ws/dashboard`;
+    const ws = new WebSocket(wsUrl);
+    ws.onmessage = (msg) => {
+      try {
+        const data = JSON.parse(msg.data);
+        if (data.type === 'exception_resolved' || data.type === 'ingest' || data.type === 'agent_processed') {
+          loadData();
+        }
+      } catch { /* ignore */ }
+    };
+    return () => ws.close();
   }, []);
 
   const handleResolve = async (eventId: string, resolutionType: string) => {

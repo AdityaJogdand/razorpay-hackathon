@@ -13,6 +13,7 @@ from backend.models.enums import (
     FailureClass, ActionType, ActionStatus, LedgerEventType,
 )
 from backend.models.tables import FailureEvent, Action, Suppression, AuditLedger, ExceptionResolution
+from backend.dashboard.ws import notify_dashboard_update
 
 router = APIRouter(prefix="/dashboard", tags=["dashboard"])
 
@@ -113,14 +114,32 @@ async def list_failure_events(
         outcome_detail = "Awaiting processing"
         recovered_amount = 0
         if actions:
-            succeeded = [a for a in actions if a.status == ActionStatus.SUCCEEDED]
+            # Only a successful RETRY means money was recovered
+            retry_succeeded = [a for a in actions if a.status == ActionStatus.SUCCEEDED and a.action_type == ActionType.RETRY]
+            email_succeeded = [a for a in actions if a.status == ActionStatus.SUCCEEDED and a.action_type in (ActionType.CONTACT_EMAIL, ActionType.REAUTH_REQUEST)]
+            email_pending = [a for a in actions if a.status == ActionStatus.PENDING_APPROVAL and a.action_type in (ActionType.CONTACT_EMAIL, ActionType.REAUTH_REQUEST)]
+            email_denied = [a for a in actions if a.status == ActionStatus.DENIED and a.action_type in (ActionType.CONTACT_EMAIL, ActionType.REAUTH_REQUEST)]
+            escalated = [a for a in actions if a.action_type == ActionType.ESCALATE_HUMAN]
             failed = [a for a in actions if a.status == ActionStatus.FAILED]
             scheduled = [a for a in actions if a.status == ActionStatus.SCHEDULED]
-            if succeeded:
+
+            if retry_succeeded:
                 outcome = "recovered"
-                outcome_detail = f"Recovered via {succeeded[0].action_type.value}"
+                outcome_detail = f"Payment recovered via retry"
                 recovered_amount = e.amount_paise
-            elif all(a.status in (ActionStatus.FAILED, ActionStatus.SUPPRESSED) for a in actions):
+            elif email_succeeded:
+                outcome = "contacted"
+                outcome_detail = f"Customer contacted via email"
+            elif email_pending:
+                outcome = "pending"
+                outcome_detail = "Email awaiting human approval"
+            elif email_denied:
+                outcome = "suppressed"
+                outcome_detail = "Email denied by human review"
+            elif escalated:
+                outcome = "escalated"
+                outcome_detail = "Escalated to human review"
+            elif all(a.status in (ActionStatus.FAILED, ActionStatus.SUPPRESSED, ActionStatus.DENIED) for a in actions):
                 outcome = "failed"
                 outcome_detail = "All actions failed"
             elif scheduled:
@@ -229,13 +248,14 @@ async def dashboard_summary(
     for status, count in action_result.all():
         action_counts[status.value] = count
 
-    # Recovered amount (sum of amounts where action succeeded)
+    # Recovered amount (only count successful RETRIES — email sends are not recovery)
     recovered_result = await db.execute(
         select(func.sum(FailureEvent.amount_paise))
         .join(Action, Action.failure_event_id == FailureEvent.id)
         .where(
             Action.merchant_id == merchant_id,
             Action.status == ActionStatus.SUCCEEDED,
+            Action.action_type == ActionType.RETRY,
         )
     )
     recovered_amount = recovered_result.scalar() or 0
@@ -275,13 +295,25 @@ async def dashboard_summary(
         )
     )).scalar() or 0
 
-    # Exception count (UNKNOWN class)
-    exception_count = class_counts.get("UNKNOWN", 0)
+    # Exception count (UNKNOWN class minus resolved ones)
+    total_unknown = class_counts.get("UNKNOWN", 0)
+    resolved_exceptions = (await db.execute(
+        select(func.count(ExceptionResolution.id))
+        .where(ExceptionResolution.merchant_id == merchant_id)
+    )).scalar() or 0
+    exception_count = max(0, total_unknown - resolved_exceptions)
 
     return {
         "total_events": total,
         "recovered_amount_paise": recovered_amount,
-        "recovered_count": action_counts.get("SUCCEEDED", 0),
+        "recovered_count": (await db.execute(
+            select(func.count(Action.id))
+            .where(
+                Action.merchant_id == merchant_id,
+                Action.status == ActionStatus.SUCCEEDED,
+                Action.action_type == ActionType.RETRY,
+            )
+        )).scalar() or 0,
         "pending_count": pending_count,
         "override_count": suppression_count,
         "exception_count": exception_count,
@@ -331,6 +363,7 @@ async def resolve_exception(
     db.add(resolution)
     await db.commit()
     await db.refresh(resolution)
+    await notify_dashboard_update("exception_resolved")
 
     return {
         "id": str(resolution.id),

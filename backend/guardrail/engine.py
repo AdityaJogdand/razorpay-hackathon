@@ -8,6 +8,7 @@ violate opt-out, etc.).
 Every override is logged — showing the agent being corrected is a demo moment.
 """
 
+import re
 import logging
 from dataclasses import dataclass, field
 
@@ -263,6 +264,16 @@ def validate_proposal(
             passed=True,
         ))
 
+    # ── Rule 10: Email content safety ──
+    if final_email_draft and isinstance(final_email_draft, dict):
+        email_checks = validate_email_content(final_email_draft)
+        for ec in email_checks:
+            checks.append(ec)
+            if not ec.passed:
+                overridden = True
+        # Auto-scrub the email content
+        final_email_draft = scrub_email_content(final_email_draft)
+
     approved = not overridden
     return GuardrailResult(
         proposal=proposal,
@@ -274,3 +285,106 @@ def validate_proposal(
         final_retry_schedule=final_retry_schedule,
         final_email_draft=final_email_draft,
     )
+
+
+# ── Email Content Guardrails ──
+
+# Patterns that should never appear in customer-facing emails
+INTERNAL_ID_PATTERNS = [
+    (re.compile(r'pay_[a-f0-9]{8,}', re.IGNORECASE), 'payment ID'),
+    (re.compile(r'txn_[a-f0-9]{8,}', re.IGNORECASE), 'transaction ID'),
+    (re.compile(r'evt_[a-f0-9]{8,}', re.IGNORECASE), 'event ID'),
+    (re.compile(r'cust_[a-f0-9]{8,}', re.IGNORECASE), 'customer ID'),
+    (re.compile(r'tok_[a-f0-9]{8,}', re.IGNORECASE), 'token ID'),
+    (re.compile(r'sub_[a-f0-9]{8,}', re.IGNORECASE), 'subscription ID'),
+    (re.compile(r'merchant_\w+_\d+', re.IGNORECASE), 'merchant ID'),
+]
+
+FORBIDDEN_TERMS = [
+    (re.compile(r'\b(stack\s*trace|traceback|exception|null|undefined|NoneType)\b', re.IGNORECASE), 'technical jargon'),
+    (re.compile(r'\b(internal\s+error|server\s+error|500|404|timeout)\b', re.IGNORECASE), 'error codes'),
+]
+
+
+def validate_email_content(draft: dict) -> list[GuardrailCheck]:
+    """Validate email draft content for customer safety."""
+    checks = []
+    subject = draft.get("subject", "")
+    body = draft.get("body", "")
+    full_text = f"{subject} {body}"
+
+    # Check for internal IDs
+    found_ids = []
+    for pattern, label in INTERNAL_ID_PATTERNS:
+        if pattern.search(full_text):
+            found_ids.append(label)
+
+    if found_ids:
+        checks.append(GuardrailCheck(
+            rule_name="email_no_internal_ids",
+            rule_version=GUARDRAIL_VERSION,
+            passed=False,
+            detail=f"Email contains internal identifiers ({', '.join(found_ids)}). Auto-scrubbed.",
+        ))
+    else:
+        checks.append(GuardrailCheck(
+            rule_name="email_no_internal_ids",
+            rule_version=GUARDRAIL_VERSION,
+            passed=True,
+        ))
+
+    # Check for forbidden technical terms
+    found_terms = []
+    for pattern, label in FORBIDDEN_TERMS:
+        if pattern.search(full_text):
+            found_terms.append(label)
+
+    if found_terms:
+        checks.append(GuardrailCheck(
+            rule_name="email_no_technical_jargon",
+            rule_version=GUARDRAIL_VERSION,
+            passed=False,
+            detail=f"Email contains {', '.join(found_terms)}. Removed.",
+        ))
+    else:
+        checks.append(GuardrailCheck(
+            rule_name="email_no_technical_jargon",
+            rule_version=GUARDRAIL_VERSION,
+            passed=True,
+        ))
+
+    # Check minimum content quality
+    if len(body.strip()) < 50:
+        checks.append(GuardrailCheck(
+            rule_name="email_min_content",
+            rule_version=GUARDRAIL_VERSION,
+            passed=False,
+            detail="Email body too short — may lack necessary context for customer.",
+        ))
+    else:
+        checks.append(GuardrailCheck(
+            rule_name="email_min_content",
+            rule_version=GUARDRAIL_VERSION,
+            passed=True,
+        ))
+
+    return checks
+
+
+def scrub_email_content(draft: dict) -> dict:
+    """Remove internal IDs and technical jargon from email content."""
+    subject = draft.get("subject", "")
+    body = draft.get("body", "")
+
+    for pattern, label in INTERNAL_ID_PATTERNS:
+        subject = pattern.sub("your account", subject)
+        body = pattern.sub("your account", body)
+
+    for pattern, _ in FORBIDDEN_TERMS:
+        body = pattern.sub("", body)
+
+    # Clean up double spaces from removals
+    body = re.sub(r'  +', ' ', body)
+    subject = re.sub(r'  +', ' ', subject)
+
+    return {"subject": subject.strip(), "body": body.strip()}

@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Table, Drawer, Tooltip, Timeline, Spin, Empty, Alert, Input, Select, Button } from 'antd';
+import { Table, Drawer, Tooltip, Timeline, Spin, Empty, Alert, Input, Select, Button, message } from 'antd';
 import {
   InfoCircleOutlined,
   RightOutlined,
@@ -16,6 +16,7 @@ import {
   SearchOutlined,
   FilterOutlined,
   SortAscendingOutlined,
+  EditOutlined,
 } from '@ant-design/icons';
 import {
   ResponsiveContainer,
@@ -26,7 +27,7 @@ import {
   Tooltip as RechartsTooltip,
 } from 'recharts';
 import type { Transaction, FailureClass } from '../types/transaction';
-import { fetchDashboardEvents, fetchDashboardSummary, type DashboardEvent, type DashboardSummary } from '../api/dashboard';
+import { fetchDashboardEvents, fetchDashboardSummary, approveEmail, denyEmail, updateEmailDraft, type DashboardEvent, type DashboardSummary } from '../api/dashboard';
 import clockSvg from '../assets/clock.svg';
 import xCircleSvg from '../assets/x-circle.svg';
 import sealCheckSvg from '../assets/seal-check.svg';
@@ -47,6 +48,7 @@ function apiEventToTransaction(e: DashboardEvent): Transaction {
   }
 
   return {
+    event_id: e.id,
     id: e.transaction_id || e.id.slice(0, 12),
     amount: e.amount_paise,
     currency: e.currency,
@@ -80,13 +82,44 @@ function apiEventToTransaction(e: DashboardEvent): Transaction {
     outcome_detail: e.outcome_detail,
     failed_at: e.failed_at,
     resolved_at: e.actions.find((a) => a.status === 'SUCCEEDED')?.executed_at || undefined,
-    email_draft: e.agent.email_draft
-      ? {
-          subject: e.agent.email_draft.subject,
-          body: e.agent.email_draft.body,
-          status: e.outcome === 'suppressed' ? 'suppressed' as const : 'sent' as const,
-        }
-      : undefined,
+    email_draft: (() => {
+      const emailAction = e.actions.find((a) =>
+        a.action_type === 'CONTACT_EMAIL' || a.action_type === 'REAUTH_REQUEST'
+      );
+      const pendingAction = e.actions.find((a) =>
+        (a.action_type === 'CONTACT_EMAIL' || a.action_type === 'REAUTH_REQUEST') && (a.status === 'PENDING_APPROVAL' || a.status === 'SCHEDULED')
+      );
+      const deniedAction = e.actions.find((a) =>
+        (a.action_type === 'CONTACT_EMAIL' || a.action_type === 'REAUTH_REQUEST') && a.status === 'DENIED'
+      );
+      const succeededAction = e.actions.find((a) =>
+        (a.action_type === 'CONTACT_EMAIL' || a.action_type === 'REAUTH_REQUEST') && a.status === 'SUCCEEDED'
+      );
+      // Prefer the action copy because reviewers can edit it before approval.
+      const draft = (emailAction?.outcome as { email_draft?: { subject: string; body: string } } | null)?.email_draft || e.agent.email_draft;
+      if (!draft) return undefined;
+      const emailStatus = succeededAction ? 'sent' as const
+        : deniedAction ? 'suppressed' as const
+        : pendingAction ? 'pending_approval' as const
+        : e.outcome === 'suppressed' ? 'suppressed' as const
+        : 'sent' as const;
+      return {
+        subject: draft.subject,
+        body: draft.body,
+        status: emailStatus,
+        suppression_reason: deniedAction ? 'Denied by human review' : undefined,
+      };
+    })(),
+    pending_email_action_id: (() => {
+      const pending = e.actions.find((a) =>
+        (a.action_type === 'CONTACT_EMAIL' || a.action_type === 'REAUTH_REQUEST') && a.status === 'PENDING_APPROVAL'
+      );
+      if (pending) return pending.id;
+      const scheduled = e.actions.find((a) =>
+        (a.action_type === 'CONTACT_EMAIL' || a.action_type === 'REAUTH_REQUEST') && a.status === 'SCHEDULED'
+      );
+      return scheduled?.id;
+    })(),
   };
 }
 
@@ -371,6 +404,16 @@ export default function DecisionTrace() {
             icon: <CheckCircleFilled className="text-[11px] text-[#22c55e]" />,
             style: 'text-[#1b1f2b] font-medium',
           },
+          contacted: {
+            label: 'Email sent',
+            icon: <MailOutlined className="text-[11px] text-[#528FF0]" />,
+            style: 'text-[#528FF0] font-medium',
+          },
+          escalated: {
+            label: 'Escalated',
+            icon: <ExclamationCircleOutlined className="text-[11px] text-[#d97706]" />,
+            style: 'text-[#d97706] font-medium',
+          },
           failed: {
             label: 'Failed',
             icon: <img src={xCircleSvg} alt="" className="w-[12px] h-[12px]" />,
@@ -627,6 +670,8 @@ export default function DecisionTrace() {
               size="small"
               options={[
                 { value: 'recovered', label: 'Recovered' },
+                { value: 'contacted', label: 'Email Sent' },
+                { value: 'escalated', label: 'Escalated' },
                 { value: 'pending', label: 'Pending' },
                 { value: 'failed', label: 'Failed' },
                 { value: 'suppressed', label: 'Suppressed' },
@@ -745,7 +790,7 @@ export default function DecisionTrace() {
           body: { padding: 0 },
         }}
       >
-        {drawerTxn && <TransactionDetail txn={drawerTxn} onClose={() => setDrawerTxn(null)} />}
+        {drawerTxn && <TransactionDetail txn={drawerTxn} onClose={() => setDrawerTxn(null)} onRefresh={loadData} />}
       </Drawer>
     </div>
   );
@@ -760,14 +805,21 @@ function DetailBadge({ icon, label }: { icon: React.ReactNode; label: string }) 
   );
 }
 
-function TransactionDetail({ txn, onClose }: { txn: Transaction; onClose: () => void }) {
+function TransactionDetail({ txn, onClose, onRefresh }: { txn: Transaction; onClose: () => void; onRefresh: () => void }) {
   const actionType = getActionType(txn.proposed_action);
   const [showGuardrailChecks, setShowGuardrailChecks] = useState(false);
   const [showShaclDetails, setShowShaclDetails] = useState(false);
   const [showDataGraph, setShowDataGraph] = useState(false);
-
+  const [showEmailPreview, setShowEmailPreview] = useState(false);
+  const [emailAction, setEmailAction] = useState<'idle' | 'loading' | 'approved' | 'denied'>('idle');
+  const [isEditingEmail, setIsEditingEmail] = useState(false);
+  const [draftSubject, setDraftSubject] = useState(txn.email_draft?.subject ?? '');
+  const [draftBody, setDraftBody] = useState(txn.email_draft?.body ?? '');
+  const [isSavingEmail, setIsSavingEmail] = useState(false);
   const outcomeIcon: Record<string, React.ReactNode> = {
     recovered: <CheckCircleFilled className="text-[13px] text-[#22c55e]" />,
+    contacted: <MailOutlined className="text-[13px] text-[#528FF0]" />,
+    escalated: <ExclamationCircleOutlined className="text-[13px] text-[#d97706]" />,
     failed: <img src={xCircleSvg} alt="" className="w-[14px] h-[14px]" />,
     pending: <img src={clockSvg} alt="" className="w-[14px] h-[14px]" />,
     suppressed: <StopOutlined className="text-[13px] text-[#9ca3af]" />,
@@ -805,7 +857,7 @@ function TransactionDetail({ txn, onClose }: { txn: Transaction; onClose: () => 
 
           {/* Semantic badges row */}
           <div className="flex items-center flex-wrap gap-2 mb-5">
-            <DetailBadge icon={outcomeIcon[txn.outcome]} label={txn.outcome === 'recovered' ? 'Recovered' : txn.outcome === 'failed' ? 'Failed' : txn.outcome === 'suppressed' ? 'Suppressed' : 'Pending'} />
+            <DetailBadge icon={outcomeIcon[txn.outcome]} label={txn.outcome === 'recovered' ? 'Recovered' : txn.outcome === 'contacted' ? 'Email Sent' : txn.outcome === 'escalated' ? 'Escalated' : txn.outcome === 'failed' ? 'Failed' : txn.outcome === 'suppressed' ? 'Suppressed' : 'Pending'} />
             <DetailBadge icon={classIcon[txn.failure_class]} label={`${txn.failure_class} decline`} />
             <DetailBadge icon={<img src={sealCheckSvg} alt="" className="w-[13px] h-[13px]" />} label={`${Math.round(txn.confidence * 100)}% confidence`} />
           </div>
@@ -1047,50 +1099,211 @@ function TransactionDetail({ txn, onClose }: { txn: Transaction; onClose: () => 
         {/* Email Draft */}
         {txn.email_draft && (
           <div className="px-6 py-5 border-t border-[#f0f0f0]">
-            {/* Header */}
-            <div className="flex items-center justify-between mb-1">
-              <div className="flex items-center gap-2">
-                <MailOutlined className="text-[13px] text-[#528FF0]" />
-                <span className="text-[13px] font-semibold text-[#1b1f2b]">Email Draft</span>
-              </div>
-              {txn.email_draft.status === 'suppressed' && (
-                <span className="text-[11px] text-[#9ca3af] border border-[#e5e8ec] rounded-full px-2 py-0.5">Suppressed</span>
-              )}
-            </div>
+            {txn.email_draft.status === 'sent' || txn.outcome === 'contacted' ? (
+              <>
+                <div className="flex flex-col items-center py-5">
+                  <img src={sealCheckSvg} alt="" className="w-[40px] h-[40px] mb-2" />
+                  <span className="text-[15px] font-semibold text-[#22c55e]">Email Sent</span>
+                  <span className="text-[11.5px] text-[#9ca3af] mt-0.5">Customer contacted successfully</span>
+                  <button
+                    onClick={() => setShowEmailPreview(!showEmailPreview)}
+                    className="mt-3 text-[11px] font-medium text-[#528FF0] bg-transparent border border-[#528FF0] rounded-md px-3 py-1 cursor-pointer hover:bg-[#f0f5ff] transition-colors"
+                  >
+                    {showEmailPreview ? 'Hide Preview' : 'Preview Email'}
+                  </button>
+                </div>
 
-            {/* Context label */}
-            <div className="text-[11.5px] text-[#9ca3af] mb-3">
-              {humanReason(txn.decline_reason)} · Agent recommended {txn.proposed_action.toLowerCase()}
-            </div>
+                {showEmailPreview && (
+                  <div className="border border-[#e5e8ec] rounded-lg p-4 mt-1">
+                    <div className="text-[11.5px] text-[#9ca3af] mb-1">To: {txn.customer_email}</div>
+                    <div className="text-[13px] font-semibold text-[#1b1f2b] mb-2.5">{txn.email_draft.subject}</div>
+                    <div className="text-[12px] text-[#6b7280] leading-[1.65] whitespace-pre-line border-t border-[#f0f0f0] pt-2.5">
+                      {txn.email_draft.body}
+                    </div>
+                  </div>
+                )}
+              </>
+            ) : txn.email_draft.status === 'pending_approval' && txn.pending_email_action_id ? (
+              <>
+                {emailAction === 'approved' ? (
+                  <>
+                    <div className="flex flex-col items-center py-5">
+                      <img src={sealCheckSvg} alt="" className="w-[40px] h-[40px] mb-2" />
+                      <span className="text-[15px] font-semibold text-[#22c55e]">Email Sent</span>
+                      <span className="text-[11.5px] text-[#9ca3af] mt-0.5">Customer contacted successfully</span>
+                      <button
+                        onClick={() => setShowEmailPreview(!showEmailPreview)}
+                        className="mt-3 text-[11px] font-medium text-[#528FF0] bg-transparent border border-[#528FF0] rounded-md px-3 py-1 cursor-pointer hover:bg-[#f0f5ff] transition-colors"
+                      >
+                        {showEmailPreview ? 'Hide Preview' : 'Preview Email'}
+                      </button>
+                    </div>
+                    {showEmailPreview && (
+                      <div className="border border-[#e5e8ec] rounded-lg p-4 mt-1">
+                        <div className="text-[11.5px] text-[#9ca3af] mb-1">To: {txn.customer_email}</div>
+                        <div className="text-[13px] font-semibold text-[#1b1f2b] mb-2.5">{txn.email_draft.subject}</div>
+                        <div className="text-[12px] text-[#6b7280] leading-[1.65] whitespace-pre-line border-t border-[#f0f0f0] pt-2.5">
+                          {txn.email_draft.body}
+                        </div>
+                      </div>
+                    )}
+                  </>
+                ) : emailAction === 'denied' ? (
+                  <div className="flex flex-col items-center py-5">
+                    <CloseCircleFilled className="text-[28px] text-[#ef4444] mb-1.5" />
+                    <span className="text-[15px] font-semibold text-[#ef4444]">Email Denied</span>
+                    <span className="text-[11.5px] text-[#9ca3af] mt-0.5">Email blocked by reviewer</span>
+                  </div>
+                ) : (
+                  <>
+                    <div className="flex items-center justify-between mb-1">
+                      <div className="flex items-center gap-2">
+                        <MailOutlined className="text-[13px] text-[#d97706]" />
+                        <span className="text-[13px] font-semibold text-[#1b1f2b]">Email Draft</span>
+                      </div>
+                      <span className="text-[11px] text-[#d97706] bg-[#fffbeb] border border-[#fde68a] rounded-full px-2 py-0.5 font-semibold">Awaiting Approval</span>
+                    </div>
 
-            {/* Email content */}
-            <div className={`border border-[#e5e8ec] rounded-lg p-4 ${txn.email_draft.status === 'suppressed' ? 'opacity-40' : ''}`}>
-              <div className="text-[11.5px] text-[#9ca3af] mb-1">To: {txn.customer_email}</div>
-              <div className="text-[13px] font-semibold text-[#1b1f2b] mb-2.5">{txn.email_draft.subject}</div>
-              <div className="text-[12px] text-[#6b7280] leading-[1.65] whitespace-pre-line border-t border-[#f0f0f0] pt-2.5">
-                {txn.email_draft.body}
-              </div>
-            </div>
+                    <div className="text-[11.5px] text-[#9ca3af] mb-3">
+                      {humanReason(txn.decline_reason)} · Agent recommended {txn.proposed_action.toLowerCase()}
+                    </div>
 
-            {/* Approval actions */}
-            <div className="flex items-center gap-2 mt-4">
-              <button className="text-[12px] font-semibold text-white bg-[#1b1f2b] border-0 rounded-lg px-4 py-2 cursor-pointer hover:opacity-90 transition-opacity">
-                Allow Once
-              </button>
-              <button className="text-[12px] font-semibold text-[#1b1f2b] bg-white border border-[#e5e8ec] rounded-lg px-4 py-2 cursor-pointer hover:bg-[#f9fafb] transition-colors">
-                Allow Always
-              </button>
-              <button className="text-[12px] font-semibold text-[#ef4444] bg-white border border-[#e5e8ec] rounded-lg px-4 py-2 cursor-pointer hover:bg-[#f9fafb] transition-colors ml-auto">
-                Deny
-              </button>
-            </div>
+                    <div className="border border-[#e5e8ec] rounded-lg p-4">
+                      <div className="flex items-center justify-between gap-3 mb-1">
+                        <div className="text-[11.5px] text-[#9ca3af]">To: {txn.customer_email}</div>
+                        {!isEditingEmail && (
+                          <button
+                            onClick={() => setIsEditingEmail(true)}
+                            className="inline-flex items-center gap-1 text-[11px] font-medium text-[#528FF0] bg-transparent border-0 cursor-pointer hover:text-[#2563eb]"
+                          >
+                            <EditOutlined /> Edit email
+                          </button>
+                        )}
+                      </div>
+                      {isEditingEmail ? (
+                        <div className="flex flex-col gap-3 pt-3">
+                          <Input value={draftSubject} onChange={(event) => setDraftSubject(event.target.value)} placeholder="Email subject" />
+                          <Input.TextArea
+                            value={draftBody}
+                            onChange={(event) => setDraftBody(event.target.value)}
+                            autoSize={{ minRows: 6, maxRows: 12 }}
+                            placeholder="Email body"
+                          />
+                          <div className="flex justify-end gap-2 pt-1">
+                            <Button size="small" onClick={() => {
+                              setDraftSubject(txn.email_draft!.subject);
+                              setDraftBody(txn.email_draft!.body);
+                              setIsEditingEmail(false);
+                            }}>Cancel</Button>
+                            <Button
+                              size="small"
+                              type="primary"
+                              loading={isSavingEmail}
+                              disabled={!draftSubject.trim() || !draftBody.trim()}
+                              className="!bg-[#1b1f2b] !border-[#1b1f2b] hover:!bg-[#343a4a] hover:!border-[#343a4a]"
+                              onClick={async () => {
+                                setIsSavingEmail(true);
+                                try {
+                                  const updatedDraft = await updateEmailDraft(txn.pending_email_action_id!, {
+                                    subject: draftSubject.trim(),
+                                    body: draftBody.trim(),
+                                  });
+                                  setDraftSubject(updatedDraft.subject);
+                                  setDraftBody(updatedDraft.body);
+                                  setIsEditingEmail(false);
+                                  onRefresh();
+                                  message.success('Email draft saved');
+                                } catch {
+                                  message.error('Could not save the email draft. Please try again.');
+                                } finally {
+                                  setIsSavingEmail(false);
+                                }
+                              }}
+                            >Save changes</Button>
+                          </div>
+                        </div>
+                      ) : (
+                        <>
+                          <div className="text-[13px] font-semibold text-[#1b1f2b] mb-2.5">{draftSubject}</div>
+                          <div className="text-[12px] text-[#6b7280] leading-[1.65] whitespace-pre-line border-t border-[#f0f0f0] pt-2.5">
+                            {draftBody}
+                          </div>
+                        </>
+                      )}
+                    </div>
 
-            {/* Permission explanation */}
-            <div className="text-[10.5px] text-[#9ca3af] mt-2.5 leading-[1.5]">
-              <span className="font-semibold">Allow Once</span> sends this email only.
-              <span className="font-semibold ml-1.5">Allow Always</span> auto-sends future emails for this decline type.
-              <span className="font-semibold ml-1.5">Deny</span> blocks this email and flags it for review.
-            </div>
+                    {emailAction === 'loading' ? (
+                      <div className="flex items-center justify-center py-6 mt-3">
+                        <Spin />
+                        <span className="ml-3 text-[13px] text-[#7b8294]">Sending email...</span>
+                      </div>
+                    ) : (
+                      <div className="flex items-center gap-2 mt-4">
+                        <button
+                          onClick={async () => {
+                            setEmailAction('loading');
+                            try {
+                              const res = await approveEmail(txn.pending_email_action_id!);
+                              if (res.status === 'SUCCEEDED') {
+                                setEmailAction('approved');
+                              } else {
+                                setEmailAction('idle');
+                              }
+                              setTimeout(() => onRefresh(), 1500);
+                            } catch {
+                              setEmailAction('idle');
+                            }
+                          }}
+                          className="flex-1 text-[12px] font-semibold text-white bg-[#1b1f2b] border-0 rounded-lg px-4 py-2 cursor-pointer hover:opacity-90 transition-opacity"
+                        >
+                          Allow
+                        </button>
+                        <button
+                          onClick={async () => {
+                            setEmailAction('loading');
+                            try {
+                              await denyEmail(txn.pending_email_action_id!);
+                              setEmailAction('denied');
+                              setTimeout(() => onRefresh(), 1500);
+                            } catch {
+                              setEmailAction('idle');
+                            }
+                          }}
+                          className="flex-1 text-[12px] font-semibold text-[#ef4444] bg-white border border-[#e5e8ec] rounded-lg px-4 py-2 cursor-pointer hover:bg-[#fef2f2] transition-colors"
+                        >
+                          Deny
+                        </button>
+                      </div>
+                    )}
+                  </>
+                )}
+              </>
+            ) : (
+              <>
+                {/* Suppressed/Denied state */}
+                <div className="flex items-center justify-between mb-1">
+                  <div className="flex items-center gap-2">
+                    <MailOutlined className="text-[13px] text-[#9ca3af]" />
+                    <span className="text-[13px] font-semibold text-[#1b1f2b]">Email Draft</span>
+                  </div>
+                  <span className="text-[11px] text-[#9ca3af] border border-[#e5e8ec] rounded-full px-2 py-0.5">
+                    {txn.email_draft.status === 'suppressed' ? 'Suppressed' : 'Blocked'}
+                  </span>
+                </div>
+
+                <div className="text-[11.5px] text-[#9ca3af] mb-3">
+                  {txn.email_draft.suppression_reason || 'Email blocked by guardrail or human review'}
+                </div>
+
+                <div className="border border-[#e5e8ec] rounded-lg p-4 opacity-40">
+                  <div className="text-[11.5px] text-[#9ca3af] mb-1">To: {txn.customer_email}</div>
+                  <div className="text-[13px] font-semibold text-[#1b1f2b] mb-2.5">{txn.email_draft.subject}</div>
+                  <div className="text-[12px] text-[#6b7280] leading-[1.65] whitespace-pre-line border-t border-[#f0f0f0] pt-2.5">
+                    {txn.email_draft.body}
+                  </div>
+                </div>
+              </>
+            )}
           </div>
         )}
 

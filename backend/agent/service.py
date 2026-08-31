@@ -292,14 +292,20 @@ def _deterministic_fallback(
 
     elif failure_class == "HARD":
         email_draft = None
+        merchant_name = merchant_id.replace("merchant_", "").replace("_", " ").title() if merchant_id else "your service provider"
         if customer_email:
             email_draft = {
-                "subject": f"Payment update needed for {merchant_id}",
+                "subject": f"We could not process your payment of ₹{amount_rupees:,.0f}",
                 "body": (
-                    f"Hi,\n\nYour recent payment of ₹{amount_rupees:,.0f} could not be processed "
-                    f"because your payment method is no longer valid.\n\n"
-                    f"Please update your payment method to continue your service.\n\n"
-                    f"Best regards,\n{merchant_id} Billing"
+                    f"Hi,\n\n"
+                    f"We tried to process your payment of ₹{amount_rupees:,.0f} for "
+                    f"{merchant_name}, but it did not go through.\n\n"
+                    f"This usually happens because a card expired or your bank "
+                    f"declined the charge.\n\n"
+                    f"You can update your payment method here:\n\n"
+                    f"[Update payment method]\n\n"
+                    f"Once updated, your payment will be retried automatically.\n\n"
+                    f"Thanks,\n{merchant_name}"
                 ),
             }
         return AgentProposal(
@@ -314,14 +320,20 @@ def _deterministic_fallback(
 
     elif failure_class == "MANDATE":
         email_draft = None
+        merchant_name = merchant_id.replace("merchant_", "").replace("_", " ").title() if merchant_id else "your service provider"
         if customer_email:
             email_draft = {
-                "subject": f"Action needed: Re-authorize your payment for {merchant_id}",
+                "subject": f"Your payment of ₹{amount_rupees:,.0f} needs attention",
                 "body": (
-                    f"Hi,\n\nYour payment of ₹{amount_rupees:,.0f} could not be processed "
-                    f"because your mandate/authorization is no longer active.\n\n"
-                    f"Please re-authorize your payment method to continue.\n\n"
-                    f"Best regards,\n{merchant_id} Billing"
+                    f"Hi,\n\n"
+                    f"We tried to process your recurring payment of ₹{amount_rupees:,.0f} "
+                    f"for {merchant_name}, but it did not go through because your "
+                    f"payment mandate is no longer active.\n\n"
+                    f"To fix this, please re-authorize your mandate:\n\n"
+                    f"[Re-authorize mandate]\n\n"
+                    f"This takes less than 2 minutes and requires a one-time "
+                    f"verification as per RBI guidelines.\n\n"
+                    f"Thanks,\n{merchant_name}"
                 ),
             }
         return AgentProposal(

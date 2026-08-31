@@ -17,12 +17,13 @@ import logging
 from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Query
+from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.core.database import get_db
 from backend.models.enums import ActionType, ActionStatus, LedgerEventType
-from backend.models.tables import FailureEvent, Action, ConfigVersion, Suppression
+from backend.models.tables import FailureEvent, Action, ConfigVersion, Suppression, AuditLedger
 from backend.agent.service import get_agent_proposal
 from backend.core.security import validate_uuid
 from backend.guardrail.shacl_engine import validate_proposal_shacl, get_shacl_report
@@ -33,6 +34,11 @@ from backend.dashboard.ws import notify_dashboard_update
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/agent", tags=["agent"])
+
+
+class EmailDraftUpdate(BaseModel):
+    subject: str = Field(min_length=1, max_length=255)
+    body: str = Field(min_length=1, max_length=10_000)
 
 
 @router.post("/process/{event_id}")
@@ -261,24 +267,23 @@ async def process_with_agent(
             recovery_plan_id=None,
             merchant_id=event.merchant_id,
             action_type=at,
-            status=ActionStatus.SCHEDULED,
+            status=ActionStatus.PENDING_APPROVAL,
             idempotency_key=f"{event.id}:{event.transaction_id}:AGENT_{final_action_type}:{contact_num}",
             scheduled_at=now,
+            outcome={
+                "email_draft": email_to_send,
+                "customer_email": event.customer_email,
+                "amount_paise": event.amount_paise,
+            },
         )
         db.add(action_row)
         await db.flush()
 
-        exec_result = await execute_action(
-            db=db,
-            action=action_row,
-            email_draft=email_to_send,
-            customer_email=event.customer_email,
-            merchant_id=event.merchant_id,
-        )
+        # Do NOT auto-execute email — requires human approval via /agent/approve-email
         execution_results.append({
             "action_type": final_action_type,
-            "status": exec_result.status,
-            "detail": exec_result.detail,
+            "status": "PENDING_APPROVAL",
+            "detail": "Email draft created — awaiting human approval",
         })
 
     elif final_action_type == "ESCALATE_HUMAN":
@@ -337,6 +342,138 @@ async def process_with_agent(
             },
         },
         "execution": execution_results,
+    }
+
+
+@router.put("/email-draft/{action_id}")
+async def update_email_draft(
+    action_id: str,
+    draft: EmailDraftUpdate,
+    db: AsyncSession = Depends(get_db),
+):
+    """Update a pending email draft before a reviewer approves it."""
+    validate_uuid(action_id)
+    result = await db.execute(select(Action).where(Action.id == uuid.UUID(action_id)))
+    action = result.scalar_one_or_none()
+    if not action:
+        raise HTTPException(status_code=404, detail="Action not found")
+    if action.status not in (ActionStatus.PENDING_APPROVAL, ActionStatus.SCHEDULED):
+        raise HTTPException(status_code=400, detail=f"Action is {action.status.value}, cannot edit")
+    if action.action_type not in (ActionType.CONTACT_EMAIL, ActionType.REAUTH_REQUEST):
+        raise HTTPException(status_code=400, detail="Action is not an email")
+
+    outcome = dict(action.outcome or {})
+    outcome["email_draft"] = {"subject": draft.subject.strip(), "body": draft.body.strip()}
+    action.outcome = outcome
+    await db.commit()
+    await notify_dashboard_update("email_draft_updated")
+
+    return {"action_id": str(action.id), "subject": outcome["email_draft"]["subject"], "body": outcome["email_draft"]["body"]}
+
+
+@router.post("/approve-email/{action_id}")
+async def approve_email(
+    action_id: str,
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Human approves a pending email action — actually send the email now.
+    """
+    validate_uuid(action_id)
+    action_uuid = uuid.UUID(action_id)
+    result = await db.execute(
+        select(Action).where(Action.id == action_uuid)
+    )
+    action = result.scalar_one_or_none()
+    if not action:
+        raise HTTPException(status_code=404, detail="Action not found")
+    if action.status not in (ActionStatus.PENDING_APPROVAL, ActionStatus.SCHEDULED):
+        raise HTTPException(status_code=400, detail=f"Action is {action.status.value}, cannot approve")
+
+    # Extract stored email info from outcome
+    stored = action.outcome or {}
+    email_draft = stored.get("email_draft")
+    customer_email = stored.get("customer_email")
+    amount_paise = stored.get("amount_paise", 0)
+
+    # Fallback: if no email data in outcome, look up from the event and ledger
+    if not customer_email:
+        event_result = await db.execute(
+            select(FailureEvent).where(FailureEvent.id == action.failure_event_id)
+        )
+        event = event_result.scalar_one_or_none()
+        if event:
+            customer_email = event.customer_email
+            amount_paise = event.amount_paise
+            if not email_draft:
+                # Try to get from agent proposal in ledger
+                ledger_result = await db.execute(
+                    select(AuditLedger).where(
+                        AuditLedger.entity_id == event.id,
+                        AuditLedger.event_type == LedgerEventType.AGENT_PROPOSAL,
+                    ).order_by(AuditLedger.created_at.desc()).limit(1)
+                )
+                ledger_entry = ledger_result.scalar_one_or_none()
+                if ledger_entry and ledger_entry.data:
+                    email_draft = ledger_entry.data.get("email_draft")
+                # Final fallback
+                if not email_draft:
+                    amount_rupees = amount_paise / 100
+                    email_draft = {
+                        "subject": f"Payment update needed — {event.merchant_id}",
+                        "body": f"Hi,\n\nYour recent payment of ₹{amount_rupees:,.0f} could not be processed.\n\nPlease update your payment method to continue your service.\n\nBest regards,\n{event.merchant_id} Billing",
+                    }
+
+    # Execute the email
+    action.status = ActionStatus.SCHEDULED
+    await db.flush()
+
+    exec_result = await execute_action(
+        db=db,
+        action=action,
+        email_draft=email_draft,
+        customer_email=customer_email,
+        merchant_id=action.merchant_id,
+        amount_paise=amount_paise,
+    )
+    await db.commit()
+    await notify_dashboard_update("email_approved")
+
+    return {
+        "action_id": str(action.id),
+        "status": exec_result.status,
+        "detail": exec_result.detail,
+    }
+
+
+@router.post("/deny-email/{action_id}")
+async def deny_email(
+    action_id: str,
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Human denies a pending email action.
+    """
+    validate_uuid(action_id)
+    action_uuid = uuid.UUID(action_id)
+    result = await db.execute(
+        select(Action).where(Action.id == action_uuid)
+    )
+    action = result.scalar_one_or_none()
+    if not action:
+        raise HTTPException(status_code=404, detail="Action not found")
+    if action.status not in (ActionStatus.PENDING_APPROVAL, ActionStatus.SCHEDULED):
+        raise HTTPException(status_code=400, detail=f"Action is {action.status.value}, cannot deny")
+
+    action.status = ActionStatus.DENIED
+    action.executed_at = datetime.now(timezone.utc)
+    await db.commit()
+    await notify_dashboard_update("email_denied")
+
+    return {
+        "action_id": str(action.id),
+        "status": "DENIED",
+        "detail": "Email denied by human review",
     }
 
 

@@ -14,6 +14,7 @@ import {
   SwapOutlined,
   FileTextOutlined,
   LinkOutlined,
+  ThunderboltOutlined,
 } from '@ant-design/icons';
 import Logo from '../assets/razor-pay-logo.png';
 
@@ -65,8 +66,10 @@ export default function AppLayout() {
   const mainItems: SidebarItem[] = [
     { key: '/', icon: <HomeOutlined />, label: 'Home' },
     { key: '/trace', icon: <SwapOutlined />, label: 'Decisions' },
-    { key: '/batch', icon: <BarChartOutlined />, label: 'Recovery Impact' },
+      // { key: '/batch', icon: <BarChartOutlined />, label: 'Recovery Impact' },
     { key: '/exceptions', icon: <FileTextOutlined />, label: 'Exception Queue' },
+    { key: '/mandates', icon: <BarChartOutlined />, label: 'Mandate Sequencer', badge: 'New' },
+    { key: '/simulate', icon: <ThunderboltOutlined />, label: 'Gateway Simulator' },
   ];
 
   const productItems: SidebarItem[] = [
@@ -91,17 +94,22 @@ export default function AppLayout() {
                 key={item.key}
                 onClick={() => navigate(item.key)}
                 className={`
-                  flex items-center gap-3 mx-2.5 px-3 h-[34px] mb-1 cursor-pointer text-[13px] transition-colors rounded-lg
+                  flex items-center gap-3 mx-2.5 px-3 h-[34px] mb-1 cursor-pointer text-[13px] transition-colors rounded-lg whitespace-nowrap
                   ${isActive(item.key)
                     ? 'bg-[#e8e8e8] font-semibold text-[#1b1f2b]'
                     : 'text-[#3b4055] hover:bg-[#ededed]'
                   }
                 `}
               >
-                <span className={`text-[15px] ${isActive(item.key) ? 'text-[#1b1f2b]' : 'text-[#7b8294]'}`}>
+                <span className={`text-[15px] shrink-0 ${isActive(item.key) ? 'text-[#1b1f2b]' : 'text-[#7b8294]'}`}>
                   {item.icon}
                 </span>
                 <span>{item.label}</span>
+                {item.badge && (
+                  <span className="text-[11px] font-semibold text-[#1a8b4f] bg-[#e6f4ea] px-2 py-0.5 rounded ml-auto shrink-0">
+                    {item.badge}
+                  </span>
+                )}
               </div>
             ))}
 
@@ -114,7 +122,7 @@ export default function AppLayout() {
             {productItems.map((item) => (
               <div
                 key={item.key}
-                onClick={() => item.key === '/ledger' ? verifyLedger() : navigate(item.key)}
+                onClick={() => navigate(item.key)}
                 className={`
                   flex items-center gap-3 mx-2.5 px-3 h-[34px] mb-1 cursor-pointer text-[13px] transition-colors rounded-lg whitespace-nowrap
                   ${isActive(item.key)

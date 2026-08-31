@@ -55,12 +55,23 @@ export default function BatchSummary() {
   const [error, setError] = useState<string | null>(null);
   const [method, setMethod] = useState<'dr' | 'ips'>('dr');
 
-  useEffect(() => {
+  const loadData = () => {
     setLoading(true);
     fetchOPE({ method, split: 'holdout' })
       .then(setData)
       .catch((err) => setError(err instanceof Error ? err.message : 'Failed to load'))
       .finally(() => setLoading(false));
+  };
+
+  useEffect(() => {
+    loadData();
+  }, [method]);
+
+  useEffect(() => {
+    const wsUrl = `${(import.meta.env.VITE_API_URL || 'http://localhost:8000').replace(/^http/, 'ws')}/ws/dashboard`;
+    const ws = new WebSocket(wsUrl);
+    ws.onmessage = () => { loadData(); };
+    return () => ws.close();
   }, [method]);
 
   if (loading) {

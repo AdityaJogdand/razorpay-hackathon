@@ -22,6 +22,8 @@ class ActionStatus(str, enum.Enum):
     FAILED = "FAILED"
     SUPPRESSED = "SUPPRESSED"
     UNRESOLVED = "UNRESOLVED"
+    PENDING_APPROVAL = "PENDING_APPROVAL"
+    DENIED = "DENIED"
 
 
 class InstrumentType(str, enum.Enum):

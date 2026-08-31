@@ -1,6 +1,6 @@
 export type FailureClass = 'HARD' | 'SOFT' | 'MANDATE' | 'UNKNOWN';
 export type GuardrailStatus = 'approved' | 'overridden';
-export type Outcome = 'recovered' | 'failed' | 'pending' | 'suppressed';
+export type Outcome = 'recovered' | 'failed' | 'pending' | 'suppressed' | 'contacted' | 'escalated';
 
 export interface GuardrailCheck {
   rule: string;
@@ -18,6 +18,7 @@ export interface ShaclValidation {
 }
 
 export interface Transaction {
+  event_id: string;
   id: string;
   amount: number;
   currency: string;
@@ -41,9 +42,10 @@ export interface Transaction {
   email_draft?: {
     subject: string;
     body: string;
-    status: 'sent' | 'suppressed';
+    status: 'sent' | 'suppressed' | 'pending_approval';
     suppression_reason?: string;
   };
+  pending_email_action_id?: string;
   failed_at: string;
   resolved_at?: string;
 }
