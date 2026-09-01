@@ -17,6 +17,7 @@ class Settings(BaseSettings):
     gmail_user: str = ""
     gmail_app_password: str = ""
     kill_switch: bool = False
+    elevenlabs_api_key: str = ""
 
     model_config = {"env_file": ".env", "env_file_encoding": "utf-8"}
 

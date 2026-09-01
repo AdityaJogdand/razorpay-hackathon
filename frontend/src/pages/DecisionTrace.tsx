@@ -17,6 +17,7 @@ import {
   FilterOutlined,
   SortAscendingOutlined,
   EditOutlined,
+  PhoneOutlined,
 } from '@ant-design/icons';
 import {
   ResponsiveContainer,
@@ -95,8 +96,9 @@ function apiEventToTransaction(e: DashboardEvent): Transaction {
       const succeededAction = e.actions.find((a) =>
         (a.action_type === 'CONTACT_EMAIL' || a.action_type === 'REAUTH_REQUEST') && a.status === 'SUCCEEDED'
       );
-      // Prefer the action copy because reviewers can edit it before approval.
-      const draft = (emailAction?.outcome as { email_draft?: { subject: string; body: string } } | null)?.email_draft || e.agent.email_draft;
+      // Only show email draft if there's an actual email action — not just an agent suggestion
+      if (!emailAction) return undefined;
+      const draft = (emailAction.outcome as { email_draft?: { subject: string; body: string } } | null)?.email_draft || e.agent.email_draft;
       if (!draft) return undefined;
       const emailStatus = succeededAction ? 'sent' as const
         : deniedAction ? 'suppressed' as const
@@ -231,7 +233,12 @@ export default function DecisionTrace() {
         fetchDashboardEvents({ limit: 50 }),
         fetchDashboardSummary(),
       ]);
-      setTransactions(eventsRes.events.map(apiEventToTransaction));
+      const refreshedTransactions = eventsRes.events.map(apiEventToTransaction);
+      setTransactions(refreshedTransactions);
+      setDrawerTxn((current) => current
+        ? refreshedTransactions.find((transaction) => transaction.event_id === current.event_id) || current
+        : null
+      );
       setSummary(summaryRes);
       setError(null);
     } catch (err) {
@@ -247,7 +254,7 @@ export default function DecisionTrace() {
       const wsUrl = (import.meta.env.VITE_API_URL || 'http://localhost:8000').replace(/^http/, 'ws') + '/ws/dashboard';
       const ws = new WebSocket(wsUrl);
       wsRef.current = ws;
-      ws.onmessage = () => { loadData(); };
+      ws.onmessage = () => { void loadData(); };
       ws.onclose = () => { if (!cancelled) setTimeout(connectWs, 3000); };
       ws.onerror = () => ws.close();
     }
@@ -260,17 +267,9 @@ export default function DecisionTrace() {
     };
   }, []);
 
-  useEffect(() => {
-    const recalc = () => {
-      if (aboveTableRef.current) {
-        const bottom = aboveTableRef.current.getBoundingClientRect().bottom;
-        setTableScrollY(Math.max(200, window.innerHeight - bottom - 24));
-      }
-    };
-    recalc();
-    window.addEventListener('resize', recalc);
-    return () => window.removeEventListener('resize', recalc);
-  }, [loading, error]);
+  // Keep enough vertical space for at least five transaction rows.
+  // The page can scroll vertically when the dashboard content is taller than the viewport.
+  const TABLE_SCROLL_Y = 300;
 
   const recoveredChartData = useMemo(
     () => buildRecoveredChartData(transactions, chartGranularity),
@@ -340,6 +339,26 @@ export default function DecisionTrace() {
     ? summary.recovered_count
     : transactions.filter((t) => t.outcome === 'recovered').length;
 
+  // Build cumulative recovery chart data from transactions sorted by time
+  const recoveryChartData = useMemo(() => {
+    const sorted = [...transactions].sort(
+      (a, b) => new Date(a.failed_at).getTime() - new Date(b.failed_at).getTime(),
+    );
+    let cumRecovered = 0;
+    let cumAtRisk = 0;
+    const points: { label: string; recovered: number; atRisk: number }[] = [];
+    for (const t of sorted) {
+      cumAtRisk += t.amount;
+      if (t.outcome === 'recovered') cumRecovered += t.amount;
+      points.push({
+        label: new Date(t.failed_at).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' }),
+        recovered: Math.floor(cumRecovered / 100),
+        atRisk: Math.floor(cumAtRisk / 100),
+      });
+    }
+    return points;
+  }, [transactions]);
+
   const columns = [
     {
       title: 'Transaction',
@@ -390,6 +409,26 @@ export default function DecisionTrace() {
             <span className="text-[#6b7280]">{ACTION_ICON[type]}</span>
             <span className="text-[12.5px] text-[#3b4055]">{record.proposed_action}</span>
           </div>
+        );
+      },
+    },
+    {
+      title: 'Outreach',
+      key: 'outreach',
+      width: 100,
+      render: (_: unknown, record: Transaction) => {
+        if (record.outcome === 'recovered' || record.outcome === 'suppressed') return <span className="text-[11px] text-[#d1d5db]">—</span>;
+        const rec = getOutreachRecommendation(record);
+        return (
+          <Tooltip title={rec.reason}>
+            <div className="flex items-center gap-1.5">
+              {rec.method === 'call'
+                ? <PhoneOutlined className="text-[12px] text-[#22c55e]" style={{ transform: 'scaleX(-1)' }} />
+                : <MailOutlined className="text-[12px] text-[#528FF0]" />
+              }
+              <span className="text-[12px] text-[#3b4055]">{rec.method === 'call' ? 'Call' : 'Email'}</span>
+            </div>
+          </Tooltip>
         );
       },
     },
@@ -485,143 +524,109 @@ export default function DecisionTrace() {
   }
 
   return (
-    <div className="flex flex-col" style={{ height: '100vh', overflow: 'hidden' }}>
+    <div className="flex flex-col min-h-0" style={{ minHeight: 'calc(100vh - 80px)', overflow: 'visible' }}>
 
-      <div ref={aboveTableRef} className="flex-none">
+      <div className="flex-none">
 
         {/* Page Header */}
         <div className="flex items-center justify-between mb-5">
-          <div className="flex items-center gap-2">
-            <span className="text-[15px] font-semibold text-[#1b1f2b]">Overview</span>
-            <span className="text-[#528FF0] text-[13px] cursor-pointer">Today ▾</span>
-          </div>
-          <a className="text-[#528FF0] text-[13px] flex items-center gap-1 no-underline cursor-pointer">
-            Documentation <RightOutlined className="text-[9px]" />
-          </a>
-        </div>
-
-        {/* TOP CARD: Recovered Amount */}
-        <div className="bg-white rounded-lg border border-[#e5e8ec] px-6 py-5 mb-4">
-          <div className="flex items-start justify-between mb-3">
-            <div className="flex items-center gap-1.5">
-              <span className="text-[14px] text-[#3b4055] font-semibold">Recovered Amount</span>
-              <Tooltip title="Total amount recovered by the agent through retries and customer outreach">
-                <InfoCircleOutlined className="text-[#c4c9d4] text-[12px] cursor-help" />
-              </Tooltip>
-            </div>
-
-            {/* Day / Month / Year toggle */}
-            <div className="flex items-center gap-0.5 bg-[#f5f6f8] rounded-md p-0.5">
-              {(['day', 'month', 'year'] as const).map((g) => (
-                <button
-                  key={g}
-                  onClick={() => setChartGranularity(g)}
-                  className={`text-[11px] px-2 py-1 rounded transition-colors cursor-pointer border-0 ${
-                    chartGranularity === g
-                      ? 'bg-white text-[#1b1f2b] font-semibold shadow-sm'
-                      : 'bg-transparent text-[#9ca3af] hover:text-[#3b4055]'
-                  }`}
-                >
-                  {g === 'day' ? 'Day' : g === 'month' ? 'Month' : 'Year'}
-                </button>
-              ))}
-            </div>
-          </div>
-
-          <div className="flex items-end justify-between gap-6">
-            <div>
-              <div className="mb-1">
-                <span className="text-[36px] font-extrabold text-[#1b1f2b] tracking-tight leading-none">
-                  ₹{Math.floor(recoveredAmount / 100).toLocaleString('en-IN')}
-                </span>
-                <span className="text-[20px] text-[#7b8294] font-medium leading-none">
-                  .{String(recoveredAmount % 100).padStart(2, '0')}
-                </span>
-              </div>
-              <div className="text-[13px] text-[#7b8294]">
-                from {recoveredCount} recovered payments
-              </div>
-            </div>
-
-            {/* Trend chart */}
-            <div style={{ width: 240, height: 72 }} className="shrink-0">
-              <ResponsiveContainer width="100%" height="100%">
-                <AreaChart data={recoveredChartData} margin={{ top: 4, right: 2, left: 2, bottom: 0 }}>
-                  <defs>
-                    <linearGradient id="recoveredGradient" x1="0" y1="0" x2="0" y2="1">
-                      <stop offset="0%" stopColor="#528FF0" stopOpacity={0.28} />
-                      <stop offset="100%" stopColor="#528FF0" stopOpacity={0} />
-                    </linearGradient>
-                  </defs>
-                  <XAxis
-                    dataKey="label"
-                    tick={{ fontSize: 10, fill: '#9ca3af' }}
-                    axisLine={false}
-                    tickLine={false}
-                    interval="preserveStartEnd"
-                  />
-                  <YAxis hide domain={[0, 'auto']} />
-                  <RechartsTooltip
-                    formatter={(value: number) => [`₹${value.toLocaleString('en-IN')}`, 'Recovered']}
-                    labelStyle={{ fontSize: 11, color: '#6b7280' }}
-                    contentStyle={{ fontSize: 12, borderRadius: 8, border: '1px solid #e5e8ec' }}
-                  />
-                  <Area
-                    type="monotone"
-                    dataKey="amount"
-                    stroke="#528FF0"
-                    strokeWidth={2}
-                    fill="url(#recoveredGradient)"
-                  />
-                </AreaChart>
-              </ResponsiveContainer>
-            </div>
+          <div>
+            <h1 className="text-[15px] font-semibold text-[#1b1f2b] m-0">Recovery Overview</h1>
+            <p className="text-[13px] text-[#7b8294] m-0 mt-1">Measured impact across all payment failures</p>
           </div>
         </div>
 
-        {/* THREE SUMMARY CARDS */}
-        <div className="grid grid-cols-3 gap-4 mb-6">
-          <div className="bg-white rounded-lg border border-[#e5e8ec] p-5">
-            <div className="flex items-center gap-2 mb-4">
-              <WarningFilled className="text-[#d97706] text-[14px]" />
-              <span className="text-[14px] text-[#1b1f2b] font-semibold">Guardrail Overrides</span>
-              <Tooltip title="Decisions where the guardrail corrected the agent's proposal">
-                <InfoCircleOutlined className="text-[#c4c9d4] text-[12px] cursor-help" />
-              </Tooltip>
+        {/* HERO ROW: 4 KPI cards */}
+        <div className="grid grid-cols-4 gap-3 mb-5">
+          {/* Recovered */}
+          <div className="bg-white rounded-lg border border-[#e5e8ec] px-5 flex flex-col justify-center" style={{ minHeight: 140 }}>
+            <div className="flex items-center justify-between mb-3">
+              <div className="text-[11px] text-[#9ca3af] font-semibold uppercase tracking-wider">Recovered</div>
+              <div className="text-[11px] text-[#6b7280] bg-[#f3f4f6] rounded-full px-2.5 py-0.5 font-medium">
+                {summary?.recovery_rate || 0}%
+              </div>
             </div>
-            <div className="mb-1">
-              <span className="text-[32px] font-extrabold text-[#1b1f2b] leading-none">{suppressedCount}</span>
+            <div className="text-[30px] font-extrabold text-[#1b1f2b] tracking-tight leading-none mb-1.5">
+              ₹{Math.floor(recoveredAmount / 100).toLocaleString('en-IN')}
             </div>
-            <div className="text-[13px] text-[#7b8294]">overridden decisions</div>
+            <div className="text-[12px] text-[#16a34a] font-medium mb-3">
+              {recoveredCount} {recoveredCount === 1 ? 'payment' : 'payments'} recovered
+            </div>
+            <div className="h-2 bg-[#f3f4f6] rounded-full overflow-hidden">
+              <div
+                className="h-full bg-[#22c55e] rounded-full transition-all"
+                style={{ width: `${Math.min(summary?.recovery_rate || 0, 100)}%` }}
+              />
+            </div>
           </div>
 
-          <div className="bg-white rounded-lg border border-[#e5e8ec] p-5">
-            <div className="flex items-center gap-2 mb-4">
-              <ClockCircleOutlined className="text-[#528FF0] text-[14px]" />
-              <span className="text-[14px] text-[#1b1f2b] font-semibold">Pending</span>
-              <Tooltip title="Transactions awaiting resolution">
-                <InfoCircleOutlined className="text-[#c4c9d4] text-[12px] cursor-help" />
-              </Tooltip>
+          {/* At Risk */}
+          <div className="bg-white rounded-lg border border-[#e5e8ec] px-5 flex flex-col justify-center" style={{ minHeight: 140 }}>
+            <div className="text-[11px] text-[#9ca3af] font-semibold uppercase tracking-wider mb-3">At Risk</div>
+            <div className="text-[30px] font-extrabold text-[#1b1f2b] tracking-tight leading-none mb-1.5">
+              ₹{Math.floor((summary?.total_at_risk_paise || 0) / 100).toLocaleString('en-IN')}
             </div>
-            <div className="mb-1">
-              <span className="text-[32px] font-extrabold text-[#1b1f2b] leading-none">{pendingCount}</span>
+            <div className="text-[12px] text-[#9ca3af]">
+              {transactions.length} failures tracked
+              {recoveredAmount > 0 && (
+                <span className="text-[#22c55e] ml-1">
+                  · ₹{Math.floor(recoveredAmount / 100).toLocaleString('en-IN')} saved
+                </span>
+              )}
             </div>
-            <div className="text-[13px] text-[#7b8294]">awaiting action</div>
           </div>
 
-          <div className="bg-white rounded-lg border border-[#e5e8ec] p-5">
-            <div className="flex items-center gap-2 mb-4">
-              <CloseCircleFilled className="text-[#dc2626] text-[14px]" />
-              <span className="text-[14px] text-[#1b1f2b] font-semibold">Exceptions</span>
-              <Tooltip title="UNKNOWN classifications routed to human review">
-                <InfoCircleOutlined className="text-[#c4c9d4] text-[12px] cursor-help" />
-              </Tooltip>
+          {/* Guardrail Overrides */}
+          <div className="bg-white rounded-lg border border-[#e5e8ec] px-5 flex flex-col justify-center" style={{ minHeight: 140 }}>
+            <div className="text-[11px] text-[#9ca3af] font-semibold uppercase tracking-wider mb-3">Overrides</div>
+            <div className="text-[30px] font-extrabold text-[#1b1f2b] tracking-tight leading-none mb-1.5">
+              {suppressedCount}
             </div>
-            <div className="mb-1">
-              <span className="text-[32px] font-extrabold text-[#1b1f2b] leading-none">{failedCount}</span>
-            </div>
-            <div className="text-[13px] text-[#7b8294]">need human review</div>
+            <div className="text-[12px] text-[#9ca3af]">guardrail corrections</div>
           </div>
+
+          {/* Escalated */}
+          <div className="bg-white rounded-lg border border-[#e5e8ec] px-5 flex flex-col justify-center" style={{ minHeight: 140 }}>
+            <div className="text-[11px] text-[#9ca3af] font-semibold uppercase tracking-wider mb-3">Escalated</div>
+            <div className="text-[30px] font-extrabold text-[#1b1f2b] tracking-tight leading-none mb-1.5">
+              {summary?.escalated_count || failedCount}
+            </div>
+            <div className="text-[12px] text-[#9ca3af]">to human review</div>
+          </div>
+        </div>
+
+        {/* Recovery Timeline Chart */}
+        {/* Recovery Timeline Chart */}
+        <div className="bg-white rounded-lg border border-[#e5e8ec] px-5 py-4 mb-5">
+          <div className="text-[11px] text-[#9ca3af] font-semibold uppercase tracking-wider mb-3">Recovery Timeline</div>
+          {recoveryChartData.length === 0 ? (
+            <div className="flex items-center justify-center h-[160px] text-[13px] text-[#c4cdd5]">
+              Simulate payment failures to see the recovery timeline
+            </div>
+          ) : (
+            <ResponsiveContainer width="100%" height={160}>
+              <AreaChart data={recoveryChartData} margin={{ top: 4, right: 8, bottom: 0, left: 0 }}>
+                <defs>
+                  <linearGradient id="gradAtRisk" x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="0%" stopColor="#e5e8ec" stopOpacity={0.5} />
+                    <stop offset="100%" stopColor="#e5e8ec" stopOpacity={0.05} />
+                  </linearGradient>
+                  <linearGradient id="gradRecovered" x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="0%" stopColor="#22c55e" stopOpacity={0.3} />
+                    <stop offset="100%" stopColor="#22c55e" stopOpacity={0.02} />
+                  </linearGradient>
+                </defs>
+                <XAxis dataKey="label" tick={{ fontSize: 10, fill: '#9ca3af' }} axisLine={false} tickLine={false} />
+                <YAxis tick={{ fontSize: 10, fill: '#9ca3af' }} axisLine={false} tickLine={false} width={50} tickFormatter={(v: number) => `₹${v.toLocaleString('en-IN')}`} />
+                <RechartsTooltip
+                  contentStyle={{ fontSize: 12, borderRadius: 8, border: '1px solid #e5e8ec', boxShadow: '0 2px 8px rgba(0,0,0,0.06)' }}
+                  formatter={(value: number, name: string) => [`₹${value.toLocaleString('en-IN')}`, name === 'recovered' ? 'Recovered' : 'At Risk']}
+                />
+                <Area type="monotone" dataKey="atRisk" stroke="#d1d5db" strokeWidth={1.5} fill="url(#gradAtRisk)" />
+                <Area type="monotone" dataKey="recovered" stroke="#22c55e" strokeWidth={2} fill="url(#gradRecovered)" />
+              </AreaChart>
+            </ResponsiveContainer>
+          )}
         </div>
 
         {/* Tab bar + search/filter/sort bar */}
@@ -754,7 +759,10 @@ export default function DecisionTrace() {
       {transactions.length === 0 ? (
         <Empty description="No failure events found. Ingest some data via POST /ingest/webhook" />
       ) : (
-        <div className="overflow-auto rounded-lg border border-[#e5e8ec] bg-white" style={{ flex: '1 1 0', minHeight: 0 }}>
+        <div
+          className="rounded-lg border border-[#e5e8ec] bg-white overflow-hidden flex-none"
+          style={{ height: 344 }}
+        >
           {displayedTransactions.length === 0 ? (
             <div className="flex items-center justify-center h-40">
               <Empty description="No results match your filters" image={Empty.PRESENTED_IMAGE_SIMPLE} />
@@ -766,7 +774,7 @@ export default function DecisionTrace() {
               rowKey="id"
               pagination={false}
               size="small"
-              scroll={{ x: 950, y: tableScrollY }}
+              scroll={{ x: 950, y: TABLE_SCROLL_Y }}
               onRow={(record) => ({
                 onClick: () => setDrawerTxn(record),
                 className: `cursor-pointer transition-colors hover:bg-[#fafafa] ${
@@ -794,6 +802,45 @@ export default function DecisionTrace() {
       </Drawer>
     </div>
   );
+}
+
+function getOutreachRecommendation(txn: Transaction): { method: 'call' | 'email'; reason: string; score: number } {
+  let callScore = 0;
+  let emailScore = 0;
+  const reasons: string[] = [];
+
+  const amountRs = txn.amount / 100;
+
+  // High value → call (personal touch matters more)
+  if (amountRs >= 10000) { callScore += 3; reasons.push('High-value payment (Rs ' + amountRs.toLocaleString('en-IN') + ')'); }
+  else if (amountRs >= 5000) { callScore += 1; }
+  else { emailScore += 2; }
+
+  // HARD failures need explanation → call
+  if (txn.failure_class === 'HARD') { callScore += 2; reasons.push('Hard decline requires customer action with bank'); }
+  // MANDATE failures are complex → call
+  else if (txn.failure_class === 'MANDATE') { callScore += 2; reasons.push('Mandate issues need guided resolution'); }
+  // SOFT failures are simple retries → email
+  else if (txn.failure_class === 'SOFT') { emailScore += 2; reasons.push('Soft decline — simple retry nudge is enough'); }
+  // UNKNOWN → call for clarity
+  else { callScore += 1; reasons.push('Unknown failure needs personal follow-up'); }
+
+  // Already contacted via email but not recovered → escalate to call
+  if (txn.outcome === 'contacted') { callScore += 3; reasons.push('Email already sent — escalating to voice call'); }
+
+  // Already escalated → call
+  if (txn.outcome === 'escalated') { callScore += 2; reasons.push('Case escalated — needs direct customer contact'); }
+
+  // Card instrument issues → usually needs bank contact → call
+  if (txn.instrument.toLowerCase().includes('card') && txn.failure_class === 'HARD') { callScore += 1; }
+
+  // UPI/wallet are usually quick fixes → email
+  if (txn.instrument.toLowerCase().includes('upi') || txn.instrument.toLowerCase().includes('wallet')) { emailScore += 1; }
+
+  const isCall = callScore > emailScore;
+  const topReason = reasons.length > 0 ? reasons[0] : (isCall ? 'Based on failure pattern analysis' : 'Low-complexity issue suitable for email');
+
+  return { method: isCall ? 'call' : 'email', reason: topReason, score: isCall ? callScore : emailScore };
 }
 
 function DetailBadge({ icon, label }: { icon: React.ReactNode; label: string }) {
@@ -887,6 +934,30 @@ function TransactionDetail({ txn, onClose, onRefresh }: { txn: Transaction; onCl
             )}
           </div>
 
+          {/* Outreach Recommendation */}
+          {txn.outcome !== 'recovered' && txn.outcome !== 'suppressed' && (() => {
+            const rec = getOutreachRecommendation(txn);
+            const isCall = rec.method === 'call';
+            return (
+              <div className="mb-5">
+                <div className="text-[11px] font-semibold text-[#9ca3af] uppercase tracking-wider mb-1.5">Outreach Channel</div>
+                <div className="flex items-center gap-3 mb-2">
+                  <div className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[13px] font-medium ${isCall ? 'bg-[#f0fdf4] text-[#22c55e] border border-[#22c55e]' : 'border border-[#e5e8ec] text-[#7b8294]'}`}>
+                    <PhoneOutlined className="text-[12px]" style={{ transform: 'scaleX(-1)' }} />
+                    Voice Call
+                    {isCall && <span className="text-[10px] bg-[#22c55e] text-white px-1.5 py-[1px] rounded-full ml-1">Recommended</span>}
+                  </div>
+                  <div className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[13px] font-medium ${!isCall ? 'bg-[#f0fdf4] text-[#22c55e] border border-[#22c55e]' : 'border border-[#e5e8ec] text-[#7b8294]'}`}>
+                    <MailOutlined className="text-[12px]" />
+                    Email
+                    {!isCall && <span className="text-[10px] bg-[#22c55e] text-white px-1.5 py-[1px] rounded-full ml-1">Recommended</span>}
+                  </div>
+                </div>
+                <div className="text-[12px] text-[#7b8294] leading-relaxed">{rec.reason}</div>
+              </div>
+            );
+          })()}
+
           {/* Status */}
           <div>
             <div className="text-[11px] font-semibold text-[#9ca3af] uppercase tracking-wider mb-1.5">Status</div>
@@ -913,9 +984,19 @@ function TransactionDetail({ txn, onClose, onRefresh }: { txn: Transaction; onCl
         {/* Agent Decision */}
         <div className="px-6 py-5">
           <div className="text-[11px] font-semibold text-[#9ca3af] uppercase tracking-wider mb-2">Agent Decision</div>
-          <div className="text-[13px] text-[#4b5563] leading-[1.7]">
-            {txn.agent_reasoning}
-          </div>
+          {txn.agent_reasoning === 'No reasoning available' && txn.guardrail_checks.length === 0 ? (
+            <div className="flex flex-col items-center py-6 gap-3">
+              <div className="animate-spin rounded-full h-6 w-6 border-2 border-[#e5e8ec] border-t-[#528FF0]" />
+              <div className="space-y-1.5 text-center">
+                <span className="text-[13px] font-medium text-[#1b1f2b] block">Agent processing...</span>
+                <span className="text-[11px] text-[#7b8294] block">Reasoning about recovery strategy and drafting email</span>
+              </div>
+            </div>
+          ) : (
+            <div className="text-[13px] text-[#4b5563] leading-[1.7]">
+              {txn.agent_reasoning}
+            </div>
+          )}
         </div>
 
         {/* Guardrail */}
@@ -926,11 +1007,15 @@ function TransactionDetail({ txn, onClose, onRefresh }: { txn: Transaction; onCl
           >
             <div className="flex items-center gap-2.5">
               <span className="text-[11px] font-semibold text-[#9ca3af] uppercase tracking-wider">Guardrail</span>
-              <span className={`text-[11px] ${txn.guardrail_checks.every((c) => c.passed) ? 'text-[#22c55e]' : 'text-[#ef4444]'}`}>
-                {txn.guardrail_status === 'overridden'
-                  ? 'Override applied'
-                  : `${txn.guardrail_checks.filter((c) => c.passed).length}/${txn.guardrail_checks.length} passed`}
-              </span>
+              {txn.agent_reasoning === 'No reasoning available' && txn.guardrail_checks.length === 0 ? (
+                <span className="text-[11px] text-[#7b8294]">Waiting for agent...</span>
+              ) : (
+                <span className={`text-[11px] ${txn.guardrail_checks.every((c) => c.passed) ? 'text-[#22c55e]' : 'text-[#ef4444]'}`}>
+                  {txn.guardrail_status === 'overridden'
+                    ? 'Override applied'
+                    : `${txn.guardrail_checks.filter((c) => c.passed).length}/${txn.guardrail_checks.length} passed`}
+                </span>
+              )}
             </div>
             <RightOutlined
               className="text-[9px] text-[#9ca3af] transition-transform"

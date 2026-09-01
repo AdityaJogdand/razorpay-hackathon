@@ -82,10 +82,15 @@ async def list_mandate_sequences(
         .order_by(AuditLedger.created_at.desc())
     )
     proposals_by_event: dict[str, dict] = {}
+    email_drafts_by_event: dict[str, dict] = {}
     for entry in ledger_result.scalars().all():
         key = str(entry.entity_id)
         if key not in proposals_by_event:
             proposals_by_event[key] = entry.data
+        # The sequence-creation proposal is newer than the original agent
+        # proposal, but only the latter contains the generated email copy.
+        if key not in email_drafts_by_event and isinstance(entry.data.get("email_draft"), dict):
+            email_drafts_by_event[key] = entry.data["email_draft"]
 
     sequences = []
     for e in events:
@@ -97,6 +102,7 @@ async def list_mandate_sequences(
 
         # Determine current step based on actions taken
         current_step = _determine_current_step(seq.steps, actions)
+        recovered_action = _recovery_action(actions)
 
         sequences.append({
             "event_id": eid,
@@ -115,6 +121,8 @@ async def list_mandate_sequences(
             "regulatory_note": seq.regulatory_note,
             "current_step": current_step,
             "total_steps": len(seq.steps),
+            "recovered": recovered_action is not None,
+            "recovered_at": recovered_action.executed_at.isoformat() if recovered_action and recovered_action.executed_at else None,
             "steps": [
                 {
                     "step_number": s.step_number,
@@ -138,6 +146,7 @@ async def list_mandate_sequences(
                 for a in actions
             ],
             "agent_reasoning": proposal.get("reasoning", ""),
+            "agent_email_draft": email_drafts_by_event.get(eid),
         })
 
     total = (await db.execute(
@@ -177,6 +186,7 @@ async def get_mandate_sequence(
     )
     actions = list(actions_result.scalars().all())
     current_step = _determine_current_step(seq.steps, actions)
+    recovered_action = _recovery_action(actions)
 
     return {
         "event_id": str(event.id),
@@ -194,6 +204,8 @@ async def get_mandate_sequence(
         "regulatory_note": seq.regulatory_note,
         "current_step": current_step,
         "total_steps": len(seq.steps),
+        "recovered": recovered_action is not None,
+        "recovered_at": recovered_action.executed_at.isoformat() if recovered_action and recovered_action.executed_at else None,
         "steps": [
             {
                 "step_number": s.step_number,
@@ -275,30 +287,62 @@ async def create_mandate_sequence(
 
     if first_step:
         action_type = _step_to_action_type(first_step.step_type)
-        action_row = Action(
-            id=uuid.uuid4(),
-            failure_event_id=event.id,
-            recovery_plan_id=None,
-            merchant_id=event.merchant_id,
-            action_type=action_type,
-            status=ActionStatus.PENDING_APPROVAL if action_type in (
-                ActionType.CONTACT_EMAIL, ActionType.REAUTH_REQUEST
-            ) else ActionStatus.SCHEDULED,
-            idempotency_key=f"{event.id}:MANDATE_SEQ:{sub_type.value}:S{first_step.step_number}:{uuid.uuid4().hex[:8]}",
-            scheduled_at=now,
-            outcome={
+        # The agent pipeline may already have created the first email draft.
+        # Adopt it into the sequence rather than asking the customer twice.
+        existing_result = await db.execute(
+            select(Action)
+            .where(
+                Action.failure_event_id == event.id,
+                Action.action_type == action_type,
+                Action.status.in_((ActionStatus.PENDING_APPROVAL, ActionStatus.SCHEDULED)),
+            )
+            .order_by(Action.created_at.desc())
+            .limit(1)
+        )
+        action_row = existing_result.scalar_one_or_none()
+        if action_row:
+            outcome = dict(action_row.outcome or {})
+            outcome.update({
                 "mandate_sequence": True,
                 "sub_type": sub_type.value,
                 "step_number": first_step.step_number,
                 "step_type": first_step.step_type.value,
-                "email_draft": _generate_mandate_email(
-                    sub_type, event.amount_paise, event.merchant_id
-                ) if action_type in (ActionType.CONTACT_EMAIL, ActionType.REAUTH_REQUEST) else None,
                 "customer_email": event.customer_email,
-            },
-        )
-        db.add(action_row)
-        await db.flush()
+                "amount_paise": event.amount_paise,
+            })
+            action_row.outcome = outcome
+            # A sequence always begins with reviewer approval for customer
+            # communication.  Older agent-created email actions may still be
+            # scheduled, so convert them before exposing the sequence.
+            if action_type in (ActionType.CONTACT_EMAIL, ActionType.REAUTH_REQUEST):
+                action_row.status = ActionStatus.PENDING_APPROVAL
+        else:
+            action_row = Action(
+                id=uuid.uuid4(),
+                failure_event_id=event.id,
+                recovery_plan_id=None,
+                merchant_id=event.merchant_id,
+                action_type=action_type,
+                status=ActionStatus.PENDING_APPROVAL if action_type in (
+                    ActionType.CONTACT_EMAIL, ActionType.REAUTH_REQUEST
+                ) else ActionStatus.SCHEDULED,
+                idempotency_key=f"{event.id}:MANDATE_SEQ:{sub_type.value}:S{first_step.step_number}:{uuid.uuid4().hex[:8]}",
+                scheduled_at=now,
+                outcome={
+                    "mandate_sequence": True,
+                    "sub_type": sub_type.value,
+                    "step_number": first_step.step_number,
+                    "step_type": first_step.step_type.value,
+                    "email_draft": _generate_mandate_email(
+                        sub_type, event.amount_paise, event.merchant_id,
+                        first_step.step_number,
+                    ) if action_type in (ActionType.CONTACT_EMAIL, ActionType.REAUTH_REQUEST) else None,
+                    "customer_email": event.customer_email,
+                    "amount_paise": event.amount_paise,
+                },
+            )
+            db.add(action_row)
+            await db.flush()
 
         action_result = {
             "action_id": str(action_row.id),
@@ -359,6 +403,12 @@ async def advance_mandate_sequence(
         .order_by(Action.created_at.asc())
     )
     actions = list(actions_result.scalars().all())
+
+    if _has_recovered(actions):
+        raise HTTPException(
+            status_code=409,
+            detail="Payment already recovered; no further mandate outreach is required",
+        )
     current_step = _determine_current_step(seq.steps, actions)
 
     if current_step > len(seq.steps):
@@ -368,8 +418,11 @@ async def advance_mandate_sequence(
     if not next_step:
         raise HTTPException(status_code=400, detail="No next step available")
 
-    # Skip WAIT steps (they're informational)
+    # A wait is a real cadence boundary, not a visual-only marker.  Do not
+    # create the follow-up until the preceding approved email has had its
+    # configured response window.
     if next_step.step_type == SequenceStepType.WAIT:
+        _require_wait_elapsed(next_step, seq.steps, actions, now=datetime.now(timezone.utc))
         # Find the next non-wait step
         for s in seq.steps[current_step:]:
             if s.step_type != SequenceStepType.WAIT:
@@ -398,9 +451,11 @@ async def advance_mandate_sequence(
             "step_number": next_step.step_number,
             "step_type": next_step.step_type.value,
             "email_draft": _generate_mandate_email(
-                sub_type, event.amount_paise, event.merchant_id
+                sub_type, event.amount_paise, event.merchant_id,
+                next_step.step_number,
             ) if action_type in (ActionType.CONTACT_EMAIL, ActionType.REAUTH_REQUEST) else None,
             "customer_email": event.customer_email,
+            "amount_paise": event.amount_paise,
         },
     )
     db.add(action_row)
@@ -519,43 +574,136 @@ async def mandate_stats(
 # ── Helpers ──
 
 def _determine_current_step(steps: list, actions: list) -> int:
-    """Determine which step the sequence is currently on based on actions taken."""
-    if not actions:
-        return 1
+    """Determine progress from explicit sequence step numbers, never action order."""
+    if _has_recovered(actions):
+        # A captured payment is terminal regardless of where the customer was
+        # in the outreach cadence.  Remaining messages must not be sent.
+        return len(steps) + 1
 
-    # Count fully completed non-wait actions (not pending)
-    completed = len([a for a in actions if a.status in (
-        ActionStatus.SUCCEEDED, ActionStatus.FAILED, ActionStatus.UNRESOLVED, ActionStatus.DENIED
-    )])
-    # Pending approval = still on that step (in progress)
-    pending = len([a for a in actions if a.status == ActionStatus.PENDING_APPROVAL])
+    actions_by_step: dict[int, object] = {}
+    assigned_action_ids: set[object] = set()
+    for action in actions:
+        outcome = action.outcome if isinstance(action.outcome, dict) else {}
+        step_number = outcome.get("step_number")
+        if isinstance(step_number, int):
+            actions_by_step[step_number] = action
+            assigned_action_ids.add(action.id)
 
-    if pending > 0 and completed == 0:
-        # First step still awaiting approval — stay on step 1
-        return 1
+    # A legacy action can represent only the first outreach step.  Mapping
+    # untagged actions onto later steps pulls unrelated policy actions forward
+    # and bypasses the sequence's wait boundaries.
+    first_actionable = next((step for step in steps if step.step_type != SequenceStepType.WAIT), None)
+    if first_actionable and first_actionable.step_number not in actions_by_step:
+        expected_type = _step_to_action_type(first_actionable.step_type)
+        matched = next(
+            (action for action in reversed(actions)
+             if action.id not in assigned_action_ids and action.action_type == expected_type),
+            None,
+        )
+        if matched:
+            actions_by_step[first_actionable.step_number] = matched
 
-    # Map completed actions back to step numbers
-    # Each completed action corresponds to a non-WAIT step
-    non_wait_done = 0
-    for s in steps:
-        if s.step_type != SequenceStepType.WAIT:
-            non_wait_done += 1
-            if non_wait_done > completed:
-                # This is the current active step
-                # But if there's a pending action, we're on this step
-                if pending > 0:
-                    return s.step_number
-                # Otherwise check if there's a WAIT before this step
-                # that should be the current step
-                prev_idx = s.step_number - 2  # 0-indexed
-                if prev_idx >= 0 and steps[prev_idx].step_type == SequenceStepType.WAIT:
-                    return steps[prev_idx].step_number
-                return s.step_number
-    return len(steps) + 1  # All done
+    terminal_statuses = {
+        ActionStatus.SUCCEEDED,
+        ActionStatus.FAILED,
+        ActionStatus.UNRESOLVED,
+        ActionStatus.DENIED,
+    }
+
+    for index, step in enumerate(steps):
+        if step.step_type == SequenceStepType.WAIT:
+            continue
+
+        action = actions_by_step.get(step.step_number)
+        if action is None:
+            # A wait immediately before this step is active until the action is created.
+            if index > 0 and steps[index - 1].step_type == SequenceStepType.WAIT:
+                return steps[index - 1].step_number
+            return step.step_number
+
+        if action.status not in terminal_statuses:
+            return step.step_number
+
+        # A successful retry resolves the mandate; escalation is conditional and skipped.
+        if step.step_type in (SequenceStepType.RETRY_DEBIT, SequenceStepType.RETRY_WITH_LOWER_AMOUNT) and action.status == ActionStatus.SUCCEEDED:
+            return len(steps) + 1
+
+    return len(steps) + 1
+
+
+def _has_recovered(actions: list) -> bool:
+    """Return whether a successful debit has recovered this failure event."""
+    return _recovery_action(actions) is not None
+
+
+def _recovery_action(actions: list):
+    """Return the successful payment action, if the mandate has recovered."""
+    return next((
+        action for action in reversed(actions)
+        if action.action_type == ActionType.RETRY
+        and action.status == ActionStatus.SUCCEEDED
+    ), None)
+
+
+def _require_wait_elapsed(wait_step, steps: list, actions: list, now: datetime) -> None:
+    """Enforce the response window immediately before a follow-up step."""
+    wait_index = wait_step.step_number - 1
+    if wait_index <= 0:
+        return
+
+    prior_step = steps[wait_index - 1]
+    prior_action = next(
+        (
+            action for action in reversed(actions)
+            if isinstance(action.outcome, dict)
+            and action.outcome.get("step_number") == prior_step.step_number
+        ),
+        None,
+    )
+    if prior_action is None:
+        first_actionable = next((step for step in steps if step.step_type != SequenceStepType.WAIT), None)
+        if first_actionable and prior_step.step_number == first_actionable.step_number:
+            expected_type = _step_to_action_type(prior_step.step_type)
+            prior_action = next(
+                (action for action in reversed(actions) if action.action_type == expected_type),
+                None,
+            )
+    if prior_action is None:
+        raise HTTPException(status_code=409, detail="Complete the previous step before starting its wait period")
+    if prior_action.status != ActionStatus.SUCCEEDED:
+        raise HTTPException(status_code=409, detail="Approve and send the previous email before advancing")
+
+    started_at = prior_action.executed_at or prior_action.scheduled_at
+    available_at = started_at + timedelta(hours=wait_step.delay_hours)
+    if now < available_at:
+        remaining_minutes = max(1, int((available_at - now).total_seconds() // 60))
+        raise HTTPException(
+            status_code=409,
+            detail=f"Waiting period is still active; follow-up is available in {remaining_minutes} minutes",
+        )
 
 
 def _step_status(step_number: int, current_step: int, actions: list, steps: list = None) -> SequenceStepStatus:
     """Determine the display status of a step."""
+    if steps:
+        step_idx = step_number - 1
+        if _has_recovered(actions):
+            action_step_numbers = {
+                a.outcome.get("step_number")
+                for a in actions
+                if isinstance(a.outcome, dict) and isinstance(a.outcome.get("step_number"), int)
+            }
+            if step_number not in action_step_numbers:
+                return SequenceStepStatus.SKIPPED
+        # Escalation is conditional: a captured retry means there is nothing to escalate.
+        if step_idx < len(steps) and steps[step_idx].step_type == SequenceStepType.ESCALATE_HUMAN:
+            if any(a.action_type == ActionType.RETRY and a.status == ActionStatus.SUCCEEDED for a in actions):
+                return SequenceStepStatus.SKIPPED
+
+    # Every earlier step, including an elapsed wait, has completed.
+    if step_number < current_step:
+        return SequenceStepStatus.COMPLETED
+
     # For WAIT steps: only mark completed if the step AFTER the wait has an action
     if steps:
         step_idx = step_number - 1
@@ -576,9 +724,7 @@ def _step_status(step_number: int, current_step: int, actions: list, steps: list
             else:
                 return SequenceStepStatus.PENDING
 
-    if step_number < current_step:
-        return SequenceStepStatus.COMPLETED
-    elif step_number == current_step:
+    if step_number == current_step:
         return SequenceStepStatus.IN_PROGRESS
     else:
         return SequenceStepStatus.PENDING
@@ -623,8 +769,9 @@ def _generate_mandate_email(
     sub_type: MandateSubType,
     amount_paise: int,
     merchant_id: str,
+    step_number: int = 1,
 ) -> dict:
-    """Generate sub-type-specific email drafts for mandate recovery."""
+    """Generate an initial or conditional follow-up email draft."""
     amount_rupees = amount_paise / 100
     # Display-friendly merchant name (strip internal prefixes/suffixes)
     merchant_name = merchant_id.replace("merchant_", "").replace("_", " ").title() if merchant_id else "your service provider"
@@ -733,5 +880,14 @@ def _generate_mandate_email(
     }
 
     from backend.guardrail.engine import scrub_email_content
-    draft = templates.get(sub_type, default)
+    draft = dict(templates.get(sub_type, default))
+    if step_number > 1:
+        draft["subject"] = f"Reminder: {draft['subject']}"
+        draft["body"] = (
+            f"Hi,\n\n"
+            f"We are following up on our earlier message about your payment of "
+            f"₹{amount_rupees:,.0f} for {merchant_name}. We have not received "
+            f"confirmation that the payment has been recovered yet.\n\n"
+            f"{draft['body'].removeprefix('Hi,\\n\\n')}"
+        )
     return scrub_email_content(draft)

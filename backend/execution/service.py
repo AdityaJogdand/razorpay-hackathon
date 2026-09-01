@@ -189,6 +189,9 @@ async def execute_action(
     Checks kill switch, executes the action, updates status, logs to ledger.
     """
     now = datetime.now(timezone.utc)
+    # Sequence metadata (step number, draft, regulatory context) belongs to the
+    # action for its whole lifecycle. Preserve it when adding execution results.
+    existing_outcome = dict(action.outcome or {})
 
     # Check kill switch
     config_result = await db.execute(
@@ -201,7 +204,7 @@ async def execute_action(
     if config and config.kill_switch:
         action.status = ActionStatus.SUPPRESSED
         action.executed_at = now
-        action.outcome = {"reason": "kill_switch_active"}
+        action.outcome = {**existing_outcome, "reason": "kill_switch_active"}
         await db.flush()
 
         await ledger_append(
@@ -273,7 +276,7 @@ async def execute_action(
 
     # Update action
     action.status = status
-    action.outcome = outcome
+    action.outcome = {**existing_outcome, **outcome}
     await db.flush()
 
     # Audit log

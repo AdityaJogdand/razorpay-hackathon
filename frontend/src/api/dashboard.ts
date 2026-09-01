@@ -60,11 +60,15 @@ export interface DashboardEvent {
 
 export interface DashboardSummary {
   total_events: number;
+  total_at_risk_paise: number;
   recovered_amount_paise: number;
   recovered_count: number;
+  recovery_rate: number;
   pending_count: number;
   override_count: number;
   exception_count: number;
+  emails_sent: number;
+  escalated_count: number;
   by_class: Record<string, number>;
   by_action_status: Record<string, number>;
 }
@@ -236,6 +240,8 @@ export interface MandateSequence {
   regulatory_note: string;
   current_step: number;
   total_steps: number;
+  recovered: boolean;
+  recovered_at: string | null;
   steps: MandateSequenceStep[];
   actions: Array<{
     id: string;
@@ -246,6 +252,7 @@ export interface MandateSequence {
     outcome: Record<string, unknown> | null;
   }>;
   agent_reasoning?: string;
+  agent_email_draft?: { subject: string; body: string } | null;
 }
 
 export interface MandateStats {
@@ -290,4 +297,151 @@ export async function fetchGuardrailInfo(): Promise<GuardrailInfo> {
 export async function fetchLedgerCount(): Promise<{ merchant_id: string; count: number }> {
   const { data } = await api.get('/ledger/count');
   return data;
+}
+
+export interface LedgerEntry {
+  id: number;
+  event_type: string;
+  entity_type: string;
+  entity_id: string;
+  data_summary: string;
+  entry_hash: string;
+  previous_hash: string;
+  created_at: string;
+}
+
+export async function fetchLedgerRecent(limit = 50): Promise<LedgerEntry[]> {
+  const { data } = await api.get('/ledger/recent', { params: { limit } });
+  return data;
+}
+
+// ── Checkout Drop-off Recovery ──
+
+export interface CheckoutEvent {
+  id: string;
+  merchant_id: string;
+  checkout_id: string;
+  customer_email: string | null;
+  customer_phone: string | null;
+  product_name: string;
+  amount_paise: number;
+  amount_display: string;
+  currency: string;
+  drop_off_stage: string;
+  drop_off_stage_label: string;
+  drop_off_reason: string;
+  recovery_stage: string;
+  recovery_emails_sent: number;
+  recovered: boolean;
+  abandoned_at: string;
+  recovered_at?: string;
+  recovery_actions: Array<{
+    id: string;
+    type: string;
+    stage: string;
+    email?: { subject: string; body: string };
+    sent_to?: string;
+    sent_at: string;
+    status: string;
+    payment_id?: string;
+  }>;
+}
+
+export interface CheckoutStats {
+  total_abandoned: number;
+  total_amount_paise: number;
+  total_amount_display: string;
+  recovered_count: number;
+  recovered_amount_paise: number;
+  recovered_amount_display: string;
+  recovery_rate: number;
+  by_stage: Record<string, number>;
+  by_recovery_stage: Record<string, number>;
+  funnel: Array<{ stage: string; label: string; count: number; percent: number }>;
+  recoverable_count: number;
+}
+
+export interface SimulateCheckoutRequest {
+  drop_off_stage: string;
+  amount_paise?: number;
+  customer_email?: string;
+  product_name?: string;
+}
+
+export async function fetchCheckoutEvents(params?: { limit?: number; stage?: string }): Promise<{ events: CheckoutEvent[]; total: number }> {
+  const { data } = await api.get('/checkout/events', { params });
+  return data;
+}
+
+export async function fetchCheckoutStats(): Promise<CheckoutStats> {
+  const { data } = await api.get('/checkout/stats');
+  return data;
+}
+
+export async function simulateCheckoutAbandon(req: SimulateCheckoutRequest): Promise<{ event: CheckoutEvent; recovery_eligible: boolean }> {
+  const { data } = await api.post('/checkout/simulate', req);
+  return data;
+}
+
+export async function previewCheckoutEmail(eventId: string): Promise<{
+  email: { subject: string; body: string };
+  email_number: number;
+  stage: string;
+  sent_to: string;
+}> {
+  const { data } = await api.get(`/checkout/preview/${eventId}`);
+  return data;
+}
+
+export async function sendCheckoutRecovery(eventId: string): Promise<{
+  event_id: string;
+  email_number: number;
+  stage: string;
+  email: { subject: string; body: string };
+  sent_to: string;
+  remaining_emails: number;
+}> {
+  const { data } = await api.post(`/checkout/recover/${eventId}`);
+  return data;
+}
+
+export async function completeCheckout(eventId: string): Promise<{
+  event_id: string;
+  status: string;
+  amount_paise: number;
+  amount_display: string;
+  product: string;
+  detail: string;
+}> {
+  const { data } = await api.post(`/checkout/complete/${eventId}`);
+  return data;
+}
+
+// Voice Recovery API
+export interface VoiceOption {
+  voice_id: string;
+  name: string;
+  gender: string;
+  style: string;
+}
+
+export async function generateVoiceScript(eventId: string): Promise<{
+  event_id: string;
+  script: string;
+  amount_display: string;
+  customer_email: string;
+  failure_class: string;
+}> {
+  const { data } = await api.post(`/voice/generate-script/${eventId}`);
+  return data;
+}
+
+export async function fetchVoiceOptions(): Promise<VoiceOption[]> {
+  const { data } = await api.get('/voice/voices');
+  return data.voices ?? data;
+}
+
+export function getVoiceSynthesizeUrl(eventId: string): string {
+  const base = api.defaults.baseURL || 'http://localhost:8000';
+  return `${base}/voice/synthesize/${eventId}`;
 }

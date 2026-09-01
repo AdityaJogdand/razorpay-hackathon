@@ -3,7 +3,6 @@ import { Outlet, useNavigate, useLocation } from 'react-router-dom';
 import { Switch, Modal, Button, message } from 'antd';
 import { toggleKillSwitch, verifyLedger as verifyLedgerApi, fetchHealthCheck } from '../api/dashboard';
 import {
-  HomeOutlined,
   BarChartOutlined,
   SafetyOutlined,
   MailOutlined,
@@ -15,6 +14,8 @@ import {
   FileTextOutlined,
   LinkOutlined,
   ThunderboltOutlined,
+  ShoppingCartOutlined,
+  PhoneOutlined,
 } from '@ant-design/icons';
 import Logo from '../assets/razor-pay-logo.png';
 
@@ -63,19 +64,25 @@ export default function AppLayout() {
     }
   };
 
-  const mainItems: SidebarItem[] = [
-    { key: '/', icon: <HomeOutlined />, label: 'Home' },
-    { key: '/trace', icon: <SwapOutlined />, label: 'Decisions' },
-      // { key: '/batch', icon: <BarChartOutlined />, label: 'Recovery Impact' },
+  const recoveryItems: SidebarItem[] = [
+    { key: '/trace', icon: <SwapOutlined />, label: 'Decision Traces' },
     { key: '/exceptions', icon: <FileTextOutlined />, label: 'Exception Queue' },
-    { key: '/mandates', icon: <BarChartOutlined />, label: 'Mandate Sequencer', badge: 'New' },
-    { key: '/simulate', icon: <ThunderboltOutlined />, label: 'Gateway Simulator' },
-  ];
+    { key: '/mandates', icon: <BarChartOutlined />, label: 'Mandate Sequencer' },
+    { key: '/checkout', icon: <ShoppingCartOutlined />, label: 'Checkout Recovery' },
+{ 
+  key: '/voice', 
+  icon: <PhoneOutlined className="scale-x-[-1]" />, 
+  label: 'Voice Recovery' 
+},];
 
-  const productItems: SidebarItem[] = [
-    { key: '/rules', icon: <SafetyOutlined />, label: 'Guardrail Audit', badge: 'New Update' },
+  const auditItems: SidebarItem[] = [
+    { key: '/rules', icon: <SafetyOutlined />, label: 'Guardrail Audit' },
     { key: '/emails', icon: <MailOutlined />, label: 'Email Outreach' },
     { key: '/ledger', icon: <LinkOutlined />, label: 'Audit Ledger' },
+  ];
+
+  const toolItems: SidebarItem[] = [
+    { key: '/simulate', icon: <ThunderboltOutlined />, label: 'Simulation Hub' },
   ];
 
   const isActive = (key: string) => location.pathname === key;
@@ -86,65 +93,27 @@ export default function AppLayout() {
       {/* ═══════ BODY ═══════ */}
       <div className="flex flex-1 overflow-hidden">
         {/* ═══════ SIDEBAR ═══════ */}
-        <aside className="w-[250px] h-[calc(100vh-24px)] sticky top-3 self-start bg-white m-3 mr-0 rounded-2xl border border-[#e8e8e8] flex flex-col shrink-0 overflow-hidden">
+        <aside className="w-[240px] h-[calc(100vh-24px)] sticky top-3 self-start bg-white m-3 mr-0 rounded-2xl border border-[#e8e8e8] flex flex-col shrink-0 overflow-hidden">
           <nav className="flex-1 pt-2 pb-4 overflow-y-auto">
-            <img src={Logo} alt="Razorpay Logo" className="h-10 w-auto mx-6 mb-4" />
-            {mainItems.map((item) => (
-              <div
-                key={item.key}
-                onClick={() => navigate(item.key)}
-                className={`
-                  flex items-center gap-3 mx-2.5 px-3 h-[34px] mb-1 cursor-pointer text-[13px] transition-colors rounded-lg whitespace-nowrap
-                  ${isActive(item.key)
-                    ? 'bg-[#e8e8e8] font-semibold text-[#1b1f2b]'
-                    : 'text-[#3b4055] hover:bg-[#ededed]'
-                  }
-                `}
-              >
-                <span className={`text-[15px] shrink-0 ${isActive(item.key) ? 'text-[#1b1f2b]' : 'text-[#7b8294]'}`}>
-                  {item.icon}
-                </span>
-                <span>{item.label}</span>
-                {item.badge && (
-                  <span className="text-[11px] font-semibold text-[#1a8b4f] bg-[#e6f4ea] px-2 py-0.5 rounded ml-auto shrink-0">
-                    {item.badge}
-                  </span>
-                )}
-              </div>
-            ))}
+            <img src={Logo} alt="Razorpay Logo" className="h-10 w-auto mx-6 mb-5" />
 
-            <div className="px-6 pt-5 pb-1.5">
-              <span className="text-[11px] font-bold text-[#1a8b4f] uppercase tracking-[0.5px]">
-                Safety & Audit
-              </span>
-            </div>
+            <SidebarSection label="Recovery">
+              {recoveryItems.map((item) => (
+                <SidebarLink key={item.key} item={item} active={isActive(item.key) || (item.key === '/trace' && location.pathname === '/')} onClick={() => navigate(item.key)} />
+              ))}
+            </SidebarSection>
 
-            {productItems.map((item) => (
-              <div
-                key={item.key}
-                onClick={() => navigate(item.key)}
-                className={`
-                  flex items-center gap-3 mx-2.5 px-3 h-[34px] mb-1 cursor-pointer text-[13px] transition-colors rounded-lg whitespace-nowrap
-                  ${isActive(item.key)
-                    ? 'bg-[#e8e8e8] font-semibold text-[#1b1f2b]'
-                    : 'text-[#3b4055] hover:bg-[#ededed]'
-                  }
-                `}
-              >
-                <span className={`text-[15px] shrink-0 ${isActive(item.key) ? 'text-[#1b1f2b]' : 'text-[#7b8294]'}`}>
-                  {item.icon}
-                </span>
-                <span>{item.label}</span>
-                {item.badge && (
-                  <span className="text-[11px] font-semibold text-[#1a8b4f] bg-[#e6f4ea] px-2 py-0.5 rounded ml-auto shrink-0">
-                    {item.badge}
-                  </span>
-                )}
-              </div>
-            ))}
+            <SidebarSection label="Safety & Audit">
+              {auditItems.map((item) => (
+                <SidebarLink key={item.key} item={item} active={isActive(item.key)} onClick={() => navigate(item.key)} />
+              ))}
+            </SidebarSection>
 
-         
-          
+            <SidebarSection label="Tools">
+              {toolItems.map((item) => (
+                <SidebarLink key={item.key} item={item} active={isActive(item.key)} onClick={() => navigate(item.key)} />
+              ))}
+            </SidebarSection>
           </nav>
 
           {/* Bottom */}
@@ -180,14 +149,14 @@ export default function AppLayout() {
             </div>
           )}
           <div className="p-4">
-            <div className="bg-white rounded-2xl p-6 min-h-[calc(100vh-150px)] shadow-[0_1px_3px_rgba(0,0,0,0.04)]">
+            <div className="bg-white rounded-2xl p-6 shadow-[0_1px_3px_rgba(0,0,0,0.04)]" style={{ minHeight: 'calc(100vh - 56px)' }}>
               <Outlet />
             </div>
           </div>
         </main>
       </div>
 
-      {/* ═══════ LEDGER MODAL ═══════ */}
+      {/* ═══════ LEDGER MODAL ═══════  */}
       <Modal
         title="Ledger Integrity Verification"
         open={ledgerModalOpen}
@@ -223,6 +192,39 @@ export default function AppLayout() {
           </div>
         )}
       </Modal>
+    </div>
+  );
+}
+
+function SidebarSection({ label, children }: { label: string; children: React.ReactNode }) {
+  return (
+    <div className="mb-1">
+      <div className="px-5 pt-4 pb-1.5">
+        <span className="text-[10px] font-bold text-[#9ca3af] uppercase tracking-[0.8px]">
+          {label}
+        </span>
+      </div>
+      {children}
+    </div>
+  );
+}
+
+function SidebarLink({ item, active, onClick }: { item: SidebarItem; active: boolean; onClick: () => void }) {
+  return (
+    <div
+      onClick={onClick}
+      className={`
+        flex items-center gap-2.5 mx-2.5 px-3 h-[34px] cursor-pointer text-[13px] transition-all rounded-lg whitespace-nowrap
+        ${active
+          ? 'bg-[#1b1f2b] text-white font-medium'
+          : 'text-[#3b4055] hover:bg-[#f5f5f5]'
+        }
+      `}
+    >
+      <span className={`text-[14px] shrink-0 ${active ? 'text-white' : 'text-[#9ca3af]'}`}>
+        {item.icon}
+      </span>
+      <span>{item.label}</span>
     </div>
   );
 }

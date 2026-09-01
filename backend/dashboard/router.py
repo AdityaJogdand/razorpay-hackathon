@@ -303,20 +303,51 @@ async def dashboard_summary(
     )).scalar() or 0
     exception_count = max(0, total_unknown - resolved_exceptions)
 
+    # Total amount at risk
+    total_at_risk = (await db.execute(
+        select(func.sum(FailureEvent.amount_paise))
+        .where(FailureEvent.merchant_id == merchant_id)
+    )).scalar() or 0
+
+    recovered_count = (await db.execute(
+        select(func.count(Action.id))
+        .where(
+            Action.merchant_id == merchant_id,
+            Action.status == ActionStatus.SUCCEEDED,
+            Action.action_type == ActionType.RETRY,
+        )
+    )).scalar() or 0
+
+    # Emails sent count
+    emails_sent = (await db.execute(
+        select(func.count(Action.id))
+        .where(
+            Action.merchant_id == merchant_id,
+            Action.status == ActionStatus.SUCCEEDED,
+            Action.action_type.in_([ActionType.CONTACT_EMAIL, ActionType.REAUTH_REQUEST]),
+        )
+    )).scalar() or 0
+
+    # Escalated count
+    escalated_count = (await db.execute(
+        select(func.count(Action.id))
+        .where(
+            Action.merchant_id == merchant_id,
+            Action.action_type == ActionType.ESCALATE_HUMAN,
+        )
+    )).scalar() or 0
+
     return {
         "total_events": total,
+        "total_at_risk_paise": total_at_risk,
         "recovered_amount_paise": recovered_amount,
-        "recovered_count": (await db.execute(
-            select(func.count(Action.id))
-            .where(
-                Action.merchant_id == merchant_id,
-                Action.status == ActionStatus.SUCCEEDED,
-                Action.action_type == ActionType.RETRY,
-            )
-        )).scalar() or 0,
+        "recovered_count": recovered_count,
+        "recovery_rate": round(recovered_amount / total_at_risk * 100, 1) if total_at_risk > 0 else 0,
         "pending_count": pending_count,
         "override_count": suppression_count,
         "exception_count": exception_count,
+        "emails_sent": emails_sent,
+        "escalated_count": escalated_count,
         "by_class": class_counts,
         "by_action_status": action_counts,
     }

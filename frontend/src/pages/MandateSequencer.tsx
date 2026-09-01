@@ -1,6 +1,5 @@
 import { useState, useEffect } from 'react';
-import { Drawer, Spin, Empty, Tag, Button, Progress, Tooltip, message } from 'antd';
-import {
+import { Drawer, Spin, Empty, Tag, Button, Progress, Tooltip, message } from 'antd';                                                import {
   CheckCircleFilled,
   CloseCircleFilled,
   ClockCircleOutlined,
@@ -15,6 +14,7 @@ import {
   UndoOutlined,
   CheckOutlined,
   MailOutlined,
+  EditOutlined,
 } from '@ant-design/icons';
 import {
   fetchMandateSequences,
@@ -23,6 +23,7 @@ import {
   advanceMandateSequence,
   approveEmail,
   denyEmail,
+  updateEmailDraft,
   type MandateSequence,
   type MandateSequenceStep,
   type MandateStats,
@@ -60,24 +61,6 @@ const STEP_TYPE_LABELS: Record<string, string> = {
   CLOSE_NO_RECOVERY: 'Close — no recovery',
 };
 
-const ACTION_TYPE_LABELS: Record<string, string> = {
-  REAUTH_REQUEST: 'Re-auth email',
-  CONTACT_EMAIL: 'Email sent',
-  RETRY: 'Payment retry',
-  ESCALATE_HUMAN: ESCALATE_LABEL,
-};
-
-const ACTION_STATUS_LABELS: Record<string, string> = {
-  SUCCEEDED: 'Sent',
-  FAILED: 'Failed',
-  PENDING_APPROVAL: 'Awaiting approval',
-  SCHEDULED: 'Scheduled',
-  EXECUTING: 'Executing',
-  SUPPRESSED: 'Suppressed',
-  UNRESOLVED: 'Escalated',
-  DENIED: 'Denied',
-};
-
 // Map step types to the action types they produce for correlation
 const STEP_TO_ACTION_TYPE: Record<string, string[]> = {
   SEND_PRE_DEBIT_NOTIFICATION: ['CONTACT_EMAIL'],
@@ -111,8 +94,13 @@ interface SequenceStatusInfo {
 
 function deriveSequenceStatus(seq: MandateSequence): SequenceStatusInfo {
   const { actions, steps, current_step, total_steps } = seq;
+  const sequenceActions = actions.filter(action => {
+    const outcome = action.outcome;
+    return Boolean(outcome && typeof outcome === 'object' && (outcome as Record<string, unknown>).mandate_sequence);
+  });
+  const relevantActions = sequenceActions.length > 0 ? sequenceActions : actions;
 
-  if (actions.length === 0) {
+  if (relevantActions.length === 0) {
     const firstStep = steps[0];
     return {
       status: 'not_started',
@@ -123,12 +111,19 @@ function deriveSequenceStatus(seq: MandateSequence): SequenceStatusInfo {
     };
   }
 
-  const hasPending = actions.some(a => a.status === 'PENDING_APPROVAL');
-  const hasUnresolved = actions.some(a => a.status === 'UNRESOLVED');
-  const allTerminal = actions.every(a =>
-    ['SUCCEEDED', 'FAILED', 'DENIED', 'SUPPRESSED', 'UNRESOLVED'].includes(a.status)
-  );
-  const lastAction = actions[actions.length - 1];
+  const hasPending = relevantActions.some(a => a.status === 'PENDING_APPROVAL');
+  const hasUnresolved = relevantActions.some(a => a.status === 'UNRESOLVED');
+  const lastAction = relevantActions[relevantActions.length - 1];
+
+  if (seq.recovered) {
+    return {
+      status: 'completed',
+      label: 'Payment recovered',
+      color: '#15803d',
+      icon: <CheckCircleFilled className="text-[14px]" />,
+      nextAction: null,
+    };
+  }
 
   if (hasPending) {
     return {
@@ -150,7 +145,7 @@ function deriveSequenceStatus(seq: MandateSequence): SequenceStatusInfo {
     };
   }
 
-  if (current_step > total_steps && allTerminal) {
+  if (current_step > total_steps) {
     const lastNonWait = [...actions].reverse().find(a => a.action_type !== 'WAIT');
     if (lastNonWait?.status === 'FAILED' || lastNonWait?.status === 'DENIED') {
       return {
@@ -197,7 +192,7 @@ function deriveSequenceStatus(seq: MandateSequence): SequenceStatusInfo {
 // Walk through non-WAIT steps and actions in parallel.
 // The Nth non-WAIT step maps to the Nth action.
 
-type StepVisual = 'completed' | 'current' | 'pending' | 'upcoming' | 'failed' | 'escalated' | 'waiting';
+type StepVisual = 'completed' | 'current' | 'pending' | 'upcoming' | 'skipped' | 'failed' | 'escalated' | 'waiting';
 
 interface StepVisualInfo {
   visual: StepVisual;
@@ -229,19 +224,28 @@ function deriveAllStepVisuals(
     }
   }
 
-  // Positional fallback
-  const actionByPosition = new Map<number, MandateSequence['actions'][number]>();
-  actionableIndices.forEach((stepIdx, actionIdx) => {
-    if (actionIdx < actions.length) {
-      actionByPosition.set(stepIdx, actions[actionIdx]);
+  // A legacy agent email can stand in for the first outreach step only. Do
+  // not map untagged actions to later steps: those may be unrelated policy
+  // actions and would make a future email appear before its wait completes.
+  const actionByTypeFallback = new Map<number, MandateSequence['actions'][number]>();
+  const explicitlyMapped = new Set(actionByStepNumber.values());
+  const firstActionableIdx = actionableIndices[0];
+  if (firstActionableIdx !== undefined) {
+    const firstStep = steps[firstActionableIdx];
+    if (!actionByStepNumber.has(firstStep.step_number)) {
+      const expectedTypes = STEP_TO_ACTION_TYPE[firstStep.step_type] || [];
+      const matchedAction = [...actions].reverse().find(action =>
+        !explicitlyMapped.has(action) && expectedTypes.includes(action.action_type)
+      );
+      if (matchedAction) actionByTypeFallback.set(firstActionableIdx, matchedAction);
     }
-  });
+  }
 
   return steps.map((step, stepIdx) => {
     const isWait = step.step_type === 'WAIT';
 
     // Try explicit mapping first, then positional
-    const matched = actionByStepNumber.get(step.step_number) ?? actionByPosition.get(stepIdx) ?? null;
+    const matched = actionByStepNumber.get(step.step_number) ?? actionByTypeFallback.get(stepIdx) ?? null;
 
     if (isWait) {
       if (step.status === 'COMPLETED') return { visual: 'completed', matchedAction: null, errorDetail: null };
@@ -251,7 +255,7 @@ function deriveAllStepVisuals(
       const nextActionableIdx = actionableIndices.find(ai => ai > stepIdx);
       if (nextActionableIdx !== undefined) {
         const nextAction = actionByStepNumber.get(steps[nextActionableIdx].step_number)
-          ?? actionByPosition.get(nextActionableIdx);
+          ?? actionByTypeFallback.get(nextActionableIdx);
         if (nextAction) {
           const terminalStatuses = ['SUCCEEDED', 'FAILED', 'UNRESOLVED', 'DENIED'];
           if (terminalStatuses.includes(nextAction.status)) {
@@ -265,7 +269,7 @@ function deriveAllStepVisuals(
       const prevActionableIdx = [...actionableIndices].reverse().find(ai => ai < stepIdx);
       if (prevActionableIdx !== undefined) {
         const prevAction = actionByStepNumber.get(steps[prevActionableIdx].step_number)
-          ?? actionByPosition.get(prevActionableIdx);
+          ?? actionByTypeFallback.get(prevActionableIdx);
         if (prevAction && ['SUCCEEDED', 'FAILED', 'PENDING_APPROVAL'].includes(prevAction.status)) {
           return { visual: 'waiting', matchedAction: null, errorDetail: null };
         }
@@ -275,6 +279,7 @@ function deriveAllStepVisuals(
 
     // Actionable step — determine visual from matched action
     if (!matched) {
+      if (step.status === 'SKIPPED') return { visual: 'skipped', matchedAction: null, errorDetail: null };
       if (step.status === 'IN_PROGRESS') return { visual: 'current', matchedAction: null, errorDetail: null };
       if (step.status === 'COMPLETED') return { visual: 'completed', matchedAction: null, errorDetail: null };
       if (step.status === 'FAILED') return { visual: 'failed', matchedAction: null, errorDetail: null };
@@ -306,72 +311,20 @@ function deriveAllStepVisuals(
   });
 }
 
-const STEP_VISUAL_NODE: Record<StepVisual, { bg: string; text: string; connector: string; icon: React.ReactNode }> = {
-  completed: {
-    bg: 'bg-[#22c55e]', text: 'text-white', connector: 'bg-[#86efac]',
-    icon: <CheckCircleFilled />,
-  },
-  current: {
-    bg: 'bg-[#528FF0]', text: 'text-white', connector: 'bg-[#e5e8ec]',
-    icon: <PlayCircleOutlined />,
-  },
-  pending: {
-    bg: 'bg-white border-2 border-[#c4cdd5]', text: 'text-[#7b8294]', connector: 'bg-[#e5e8ec]',
-    icon: <ClockCircleOutlined />,
-  },
-  upcoming: {
-    bg: 'bg-[#f1f5f9]', text: 'text-[#94a3b8]', connector: 'bg-[#e5e8ec]',
-    icon: null,
-  },
-  failed: {
-    bg: 'bg-[#ef4444]', text: 'text-white', connector: 'bg-[#fecaca]',
-    icon: <CloseCircleFilled />,
-  },
-  escalated: {
-    bg: 'bg-[#f59e0b]', text: 'text-white', connector: 'bg-[#fde68a]',
-    icon: <WarningFilled />,
-  },
-  waiting: {
-    bg: 'bg-[#f1f5f9]', text: 'text-[#94a3b8]', connector: 'bg-[#e5e8ec]',
-    icon: <ClockCircleOutlined />,
-  },
-};
-
-// Step description text color by visual state
-const STEP_TEXT_COLOR: Record<StepVisual, string> = {
-  completed: 'text-[#1b1f2b]',
-  current: 'text-[#1b1f2b]',
-  pending: 'text-[#1b1f2b]',
-  upcoming: 'text-[#94a3b8]',
-  failed: 'text-[#ef4444]',
-  escalated: 'text-[#92400e]',
-  waiting: 'text-[#94a3b8]',
-};
 
 
 // ── Helpers ──
 
-/** Compute a deadline date from the most recent action timestamp + delay hours. */
-function computeWaitDeadline(
+function getWaitDeadline(
   delayHours: number,
-  stepIndex: number,
-  steps: MandateSequenceStep[],
-  actions: MandateSequence['actions'],
-): string | null {
-  // Find the most recent action that precedes this wait step
-  // Walk backward from this step to find the last actionable step's action
-  let precedingActionTime: string | null = null;
+  precedingAction: MandateSequence['actions'][number] | null | undefined,
+): Date | null {
+  const timestamp = precedingAction?.executed_at || precedingAction?.scheduled_at;
+  if (!timestamp) return null;
+  return new Date(new Date(timestamp).getTime() + delayHours * 60 * 60 * 1000);
+}
 
-  // Try the latest action's executed_at or scheduled_at
-  for (let i = actions.length - 1; i >= 0; i--) {
-    const t = actions[i].executed_at || actions[i].scheduled_at;
-    if (t) { precedingActionTime = t; break; }
-  }
-
-  if (!precedingActionTime) return null;
-
-  const base = new Date(precedingActionTime);
-  const deadline = new Date(base.getTime() + delayHours * 60 * 60 * 1000);
+function formatWaitDeadline(deadline: Date): string {
   return deadline.toLocaleString(undefined, {
     month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit',
   });
@@ -388,7 +341,7 @@ export default function MandateSequencer() {
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [actionLoading, setActionLoading] = useState<string | null>(null);
 
-  const load = async () => {
+  const load = async (): Promise<MandateSequence[]> => {
     setLoading(true);
     try {
       const [seqData, statsData] = await Promise.all([
@@ -397,8 +350,10 @@ export default function MandateSequencer() {
       ]);
       setSequences(seqData.sequences);
       setStats(statsData);
+      return seqData.sequences;
     } catch {
       message.error('Failed to load mandate data');
+      return [];
     } finally {
       setLoading(false);
     }
@@ -424,11 +379,9 @@ export default function MandateSequencer() {
     try {
       await advanceMandateSequence(eventId);
       message.success('Sequence advanced');
-      await load();
-      if (selectedSeq?.event_id === eventId) {
-        const updated = sequences.find(s => s.event_id === eventId);
-        if (updated) setSelectedSeq(updated);
-      }
+      const freshSequences = await load();
+      const updated = freshSequences.find(s => s.event_id === eventId);
+      if (updated) setSelectedSeq(updated);
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : 'Failed to advance';
       message.error(msg);
@@ -437,19 +390,15 @@ export default function MandateSequencer() {
     }
   };
 
-  const handleApproveEmail = async (seq: MandateSequence) => {
-    const pendingAction = seq.actions.find(a => a.status === 'PENDING_APPROVAL');
-    if (!pendingAction) {
-      message.warning('No pending email to approve');
-      return;
-    }
+  const handleApproveEmail = async (seq: MandateSequence, actionId: string) => {
+    const pendingAction = seq.actions.find(a => a.id === actionId && a.status === 'PENDING_APPROVAL');
+    if (!pendingAction) throw new Error('This email is no longer awaiting approval');
     setActionLoading(seq.event_id);
     try {
       await approveEmail(pendingAction.id);
       message.success('Email approved and sent');
-      await load();
-      // Refresh drawer data
-      const updated = sequences.find(s => s.event_id === seq.event_id);
+      const freshSequences = await load();
+      const updated = freshSequences.find(s => s.event_id === seq.event_id);
       if (updated) setSelectedSeq(updated);
     } catch {
       message.error('Failed to approve email');
@@ -458,15 +407,15 @@ export default function MandateSequencer() {
     }
   };
 
-  const handleDenyEmail = async (seq: MandateSequence) => {
-    const pendingAction = seq.actions.find(a => a.status === 'PENDING_APPROVAL');
-    if (!pendingAction) return;
+  const handleDenyEmail = async (seq: MandateSequence, actionId: string) => {
+    const pendingAction = seq.actions.find(a => a.id === actionId && a.status === 'PENDING_APPROVAL');
+    if (!pendingAction) throw new Error('This email is no longer awaiting approval');
     setActionLoading(seq.event_id);
     try {
       await denyEmail(pendingAction.id);
       message.info('Email denied');
-      await load();
-      const updated = sequences.find(s => s.event_id === seq.event_id);
+      const freshSequences = await load();
+      const updated = freshSequences.find(s => s.event_id === seq.event_id);
       if (updated) setSelectedSeq(updated);
     } catch {
       message.error('Failed to deny email');
@@ -576,9 +525,9 @@ export default function MandateSequencer() {
                 <th className="px-4 py-3 font-semibold">Transaction</th>
                 <th className="px-4 py-3 font-semibold">Sub-Type</th>
                 <th className="px-4 py-3 font-semibold">Amount</th>
-                <th className="px-4 py-3 font-semibold">Sequence Progress</th>
+                <th className="px-4 py-3 font-semibold">Progress</th>
                 <th className="px-4 py-3 font-semibold">Status</th>
-                <th className="px-4 py-3 font-semibold text-right">Actions</th>
+                <th className="px-4 py-3 w-8"></th>
               </tr>
             </thead>
             <tbody>
@@ -644,31 +593,8 @@ export default function MandateSequencer() {
                         <span className="text-[12px]">{statusInfo.label}</span>
                       </span>
                     </td>
-                    <td className="px-4 py-3 text-right" onClick={(e) => e.stopPropagation()}>
-                      {statusInfo.status !== 'completed' && statusInfo.status !== 'failed' && (
-                        statusInfo.status === 'not_started' ? (
-                          <Button
-                            size="small"
-                            type="primary"
-                            icon={<PlayCircleOutlined />}
-                            loading={actionLoading === seq.event_id}
-                            onClick={() => handleStartSequence(seq.event_id)}
-                            className="text-[11px]"
-                          >
-                            Start
-                          </Button>
-                        ) : statusInfo.status !== 'awaiting_approval' ? (
-                          <Button
-                            size="small"
-                            icon={<ArrowRightOutlined />}
-                            loading={actionLoading === seq.event_id}
-                            onClick={() => handleAdvance(seq.event_id)}
-                            className="text-[11px]"
-                          >
-                            Next Step
-                          </Button>
-                        ) : null
-                      )}
+                    <td className="px-4 py-3">
+                      <RightOutlined className="text-[10px] text-[#c4cdd5]" />
                     </td>
                   </tr>
                 );
@@ -728,22 +654,32 @@ function SequenceDetail({
   seq: MandateSequence;
   onAdvance: (eventId: string) => void;
   onStart: (eventId: string) => void;
-  onApproveEmail: (seq: MandateSequence) => void;
-  onDenyEmail: (seq: MandateSequence) => void;
+  onApproveEmail: (seq: MandateSequence, actionId: string) => Promise<void>;
+  onDenyEmail: (seq: MandateSequence, actionId: string) => Promise<void>;
   loading: string | null;
 }) {
   const statusInfo = deriveSequenceStatus(seq);
   const stepVisuals = deriveAllStepVisuals(seq.steps, seq.actions);
   const [reasoningOpen, setReasoningOpen] = useState(false);
-  const [emailPreviewOpen, setEmailPreviewOpen] = useState(true);
+  const [expandedStep, setExpandedStep] = useState<number | null>(null);
+  const [emailActionState, setEmailActionState] = useState<'idle' | 'loading' | 'approved' | 'denied'>('idle');
+  const [editingEmailId, setEditingEmailId] = useState<string | null>(null);
+  const [emailEdits, setEmailEdits] = useState<Record<string, { subject: string; body: string }>>({});
+  const [savingEmailId, setSavingEmailId] = useState<string | null>(null);
 
-  // Extract pending email draft for preview
-  const pendingAction = seq.actions.find(a => a.status === 'PENDING_APPROVAL');
-  const pendingOutcome = pendingAction?.outcome && typeof pendingAction.outcome === 'object'
-    ? pendingAction.outcome as Record<string, unknown>
-    : null;
-  const emailDraft = pendingOutcome?.email_draft as { subject: string; body: string } | undefined;
-  const customerEmail = pendingOutcome?.customer_email as string | undefined;
+  // Match previews to the actions attached to actual email steps. This keeps
+  // unrelated agent drafts out while supporting older sequence actions that
+  // predate the mandate_sequence metadata.
+  const emailStepActionIds = new Set(
+    seq.steps.flatMap((step, index) => {
+      const isEmailStep = step.step_type === 'SEND_REAUTH_EMAIL'
+        || step.step_type === 'SEND_MANDATE_RENEWAL_LINK'
+        || step.step_type === 'SEND_PRE_DEBIT_NOTIFICATION';
+      const actionId = stepVisuals[index]?.matchedAction?.id;
+      return isEmailStep && actionId ? [actionId] : [];
+    }),
+  );
+  const emailActions = seq.actions.filter(action => emailStepActionIds.has(action.id));
 
   const progressPercent = statusInfo.status === 'completed' ? 100
     : seq.total_steps > 0 ? Math.round(((seq.current_step - 1) / seq.total_steps) * 100)
@@ -756,6 +692,12 @@ function SequenceDetail({
     '#1b1f2b';
 
   const isTerminal = statusInfo.status === 'completed' || statusInfo.status === 'failed';
+  const currentStepIndex = seq.steps.findIndex(step => step.step_number === seq.current_step);
+  const currentStep = currentStepIndex >= 0 ? seq.steps[currentStepIndex] : null;
+  const activeWaitDeadline = currentStep?.step_type === 'WAIT'
+    ? getWaitDeadline(currentStep.delay_hours, stepVisuals[currentStepIndex - 1]?.matchedAction)
+    : null;
+  const isWaitingForCadence = Boolean(activeWaitDeadline && activeWaitDeadline.getTime() > Date.now());
 
   return (
     <div className="flex flex-col h-full">
@@ -841,166 +783,121 @@ function SequenceDetail({
           </div>
         )}
 
-        {/* ── Recovery Sequence (primary visual) ── */}
-        <h3 className="text-[13px] font-semibold text-[#1b1f2b] m-0 mb-4">Recovery Sequence</h3>
-        <div>
-          {seq.steps.map((step, i) => {
-            const { visual, matchedAction, errorDetail } = stepVisuals[i];
-            const nodeConfig = STEP_VISUAL_NODE[visual];
-            const isLast = i === seq.steps.length - 1;
+        {/* ── Recovery Steps ── */}
+        <div className="flex items-baseline justify-between mb-4">
+          <h3 className="text-[13px] font-semibold text-[#1b1f2b] m-0">Recovery Steps</h3>
+          <span className="text-[11px] text-[#9aa3b2]">{seq.total_steps} steps</span>
+        </div>
+        <div className="relative">
+          {/* The muted rail is always visible; colored segments show the completed/current path. */}
+          <div className="absolute left-[14px] top-4 bottom-4 w-px bg-[#e1e7ef]" aria-hidden="true" />
+          {seq.steps.map((step, stepIndex) => {
+            const { visual, matchedAction, errorDetail } = stepVisuals[stepIndex];
             const isWait = step.step_type === 'WAIT';
-            const stepLabel = STEP_TYPE_LABELS[step.step_type] || step.step_type;
-            const textColor = STEP_TEXT_COLOR[visual];
+            const isLast = stepIndex === seq.steps.length - 1;
+            const isDone = visual === 'completed';
+            const isFailed = visual === 'failed';
+            const isCurrent = visual === 'current';
+            const isApproval = visual === 'pending';
+            const isEscalated = visual === 'escalated';
+            const isSkipped = visual === 'skipped';
+            const isExpanded = expandedStep === step.step_number;
+            const title = STEP_TYPE_LABELS[step.step_type] || step.description;
+            const timestamp = matchedAction?.executed_at
+              ? new Date(matchedAction.executed_at).toLocaleString(undefined, {
+                  month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit',
+                })
+              : null;
+            const status = isDone ? 'Completed'
+              : isFailed ? 'Needs attention'
+              : isEscalated ? 'Escalated'
+              : isApproval ? 'Review needed'
+              : isCurrent ? 'In progress'
+              : isSkipped ? 'Not needed'
+              : 'Upcoming';
+            const statusClass = isDone ? 'bg-[#ecfdf3] text-[#16803c] ring-[#bbf7d0]'
+              : isFailed ? 'bg-[#fef2f2] text-[#c24141] ring-[#fecaca]'
+              : isEscalated ? 'bg-[#fff7ed] text-[#b45309] ring-[#fed7aa]'
+              : isApproval ? 'bg-[#fffbeb] text-[#a16207] ring-[#fde68a]'
+              : isCurrent ? 'bg-[#eaf2ff] text-[#2563c9] ring-[#bfdbfe]'
+              : isSkipped ? 'bg-[#f8fafc] text-[#8793a3] ring-[#e2e8f0]'
+              : 'bg-[#f8fafc] text-[#718096] ring-[#e2e8f0]';
+            const connectorClass = isDone ? 'bg-[#22a55a]'
+              : isCurrent ? 'bg-[#528ff0]'
+              : 'bg-transparent';
 
-            // Compute wait deadline for active/upcoming waits
-            let waitDeadline: string | null = null;
-            if (isWait && (visual === 'waiting' || visual === 'current')) {
-              waitDeadline = computeWaitDeadline(step.delay_hours, i, seq.steps, seq.actions);
+            if (isWait) {
+              const waitLabel = step.delay_hours >= 24
+                ? `${Math.round(step.delay_hours / 24)} day interval`
+                : `${step.delay_hours} hour interval`;
+              const deadline = visual === 'waiting'
+                ? getWaitDeadline(step.delay_hours, stepVisuals[stepIndex - 1]?.matchedAction)
+                : null;
+              return (
+                <div key={step.step_number} className="relative min-h-10 pl-11 pr-1 py-1.5">
+                  {!isLast && <div className={`absolute left-[14px] top-0 bottom-0 w-px ${isDone ? 'bg-[#22a55a]' : 'bg-transparent'}`} aria-hidden="true" />}
+                  <div className={`absolute left-[7px] top-3 flex h-[15px] w-[15px] items-center justify-center rounded-full border bg-white ${
+                    visual === 'waiting' ? 'border-[#9dbff8] text-[#528ff0]' : 'border-[#d9e1ea] text-[#98a3b3]'
+                  }`}>
+                    <ClockCircleOutlined className="text-[9px]" />
+                  </div>
+                  <div className="flex items-center gap-2 text-[11px]">
+                    <span className="font-medium text-[#7b8294]">{waitLabel}</span>
+                    {deadline && <span className="text-[#a0a8b5]">until {formatWaitDeadline(deadline)}</span>}
+                  </div>
+                </div>
+              );
             }
 
             return (
-              <div key={step.step_number} className="flex gap-3">
-                {/* Node + connector */}
-                <div className="flex flex-col items-center w-6 shrink-0">
-                  <div className={`${isWait ? 'w-[18px] h-[18px] mt-[3px]' : 'w-6 h-6'} rounded-full flex items-center justify-center text-[11px] shrink-0 ${nodeConfig.bg} ${nodeConfig.text}`}>
-                    {nodeConfig.icon || <span className="font-semibold text-[10px]">{step.step_number}</span>}
-                  </div>
-                  {!isLast && (
-                    <div className={`w-0.5 flex-1 min-h-[20px] ${nodeConfig.connector}`} />
-                  )}
+              <div key={step.step_number} className="relative pl-11 pr-1 py-1">
+                {!isLast && <div className={`absolute left-[14px] top-8 bottom-[-5px] w-px ${connectorClass}`} aria-hidden="true" />}
+                <div className={`absolute left-0 top-3 flex h-7 w-7 items-center justify-center rounded-full border-2 text-[11px] font-semibold shadow-[0_1px_2px_rgba(16,24,40,0.06)] ${
+                  isDone ? 'border-[#22a55a] bg-[#22a55a] text-white' :
+                  isFailed ? 'border-[#ef4444] bg-[#ef4444] text-white' :
+                  isEscalated ? 'border-[#f59e0b] bg-[#f59e0b] text-white' :
+                  isCurrent ? 'border-[#528ff0] bg-[#528ff0] text-white ring-4 ring-[#eaf2ff]' :
+                  isApproval ? 'border-[#d8a42d] bg-white text-[#b7791f]' :
+                  isSkipped ? 'border-[#d4dde7] bg-[#f8fafc] text-[#95a1b1]' :
+                  'border-[#cdd6e1] bg-white text-[#7b8796]'
+                }`}>
+                  {isDone ? <CheckOutlined className="text-[11px]" /> :
+                   isFailed ? <CloseCircleFilled className="text-[12px]" /> :
+                   isEscalated ? <WarningFilled className="text-[11px]" /> : step.step_number}
                 </div>
-
-                {/* Content */}
-                <div className={`flex-1 ${isLast ? 'pb-0' : 'pb-3'} min-w-0`}>
-                  {isWait ? (
-                    // Wait step — compact, shows deadline when active
-                    <div className="pt-[2px]">
-                      <span className={`text-[12px] italic ${textColor}`}>
-                        {visual === 'completed'
-                          ? `Waited ${step.delay_hours >= 24 ? `${Math.round(step.delay_hours / 24)}d` : `${step.delay_hours}h`}`
-                          : visual === 'waiting' || visual === 'current'
-                            ? waitDeadline
-                              ? `Paused — resumes ${waitDeadline}`
-                              : `Paused — awaiting ${step.delay_hours >= 24 ? `${Math.round(step.delay_hours / 24)} day${Math.round(step.delay_hours / 24) > 1 ? 's' : ''}` : `${step.delay_hours}h`}`
-                            : step.delay_hours >= 24
-                              ? `Wait ${Math.round(step.delay_hours / 24)} day${Math.round(step.delay_hours / 24) > 1 ? 's' : ''}`
-                              : `Wait ${step.delay_hours}h`
-                        }
-                      </span>
-                      {step.regulatory_basis && (
-                        <Tooltip title={step.regulatory_basis}>
-                          <SafetyOutlined className="ml-1.5 text-[10px] text-[#b0b7c3] cursor-help" />
-                        </Tooltip>
+                <button
+                  type="button"
+                  onClick={() => setExpandedStep(isExpanded ? null : step.step_number)}
+                  className={`group w-full rounded-lg border text-left transition-all duration-200 cursor-pointer ${
+                    isCurrent ? 'border-[#bfdbfe] bg-[#f5f9ff] px-3.5 py-3 shadow-[0_1px_2px_rgba(37,99,235,0.08)] hover:border-[#93c5fd] hover:shadow-[0_4px_12px_rgba(37,99,235,0.10)]' :
+                    'border-transparent bg-transparent px-3.5 py-2.5 hover:border-[#e5eaf0] hover:bg-[#fafbfd]'
+                  }`}
+                  aria-expanded={isExpanded}
+                >
+                  <div className="flex items-center justify-between gap-3">
+                    <div className="min-w-0">
+                      <div className={`text-[13px] font-semibold leading-snug ${isFailed ? 'text-[#c24141]' : 'text-[#242b38]'}`}>{title}</div>
+                      <div className="mt-1 flex flex-wrap items-center gap-1.5">
+                        <span className={`inline-flex rounded-full px-1.5 py-0.5 text-[10px] font-semibold ring-1 ring-inset ${statusClass}`}>{status}</span>
+                        {timestamp && <span className="text-[11px] text-[#98a3b3]">{timestamp}</span>}
+                      </div>
+                    </div>
+                    <RightOutlined className={`shrink-0 text-[10px] text-[#aab3c0] transition-transform duration-200 group-hover:text-[#607086] ${isExpanded ? 'rotate-90' : ''}`} />
+                  </div>
+                  {isExpanded && (
+                    <div className="mt-2.5 border-t border-[#e8edf3] pt-2.5 text-[12px] leading-relaxed text-[#687385]">
+                      <div>{step.description}</div>
+                      {errorDetail && <div className="mt-1.5 font-medium text-[#c24141]">{errorDetail}</div>}
+                      {matchedAction?.scheduled_at && !timestamp && (
+                        <div className="mt-1.5 text-[#8b96a5]">Scheduled for {new Date(matchedAction.scheduled_at).toLocaleString()}</div>
                       )}
                     </div>
-                  ) : (
-                    // Actionable step
-                    <>
-                      {/* Description — primary text */}
-                      <div className={`text-[13px] font-medium leading-snug ${textColor}`}>
-                        {step.description}
-                      </div>
-
-                      {/* Step type label — secondary */}
-                      <div className="text-[11px] text-[#b0b7c3] mt-0.5">{stepLabel}</div>
-
-                      {/* Failed step: inline error detail from matched action */}
-                      {visual === 'failed' && errorDetail && (
-                        <div className="mt-1.5 flex items-start gap-1.5 bg-[#fef2f2] border border-[#fecaca] rounded px-2.5 py-1.5">
-                          <CloseCircleFilled className="text-[11px] text-[#ef4444] mt-[1px] shrink-0" />
-                          <span className="text-[11px] text-[#991b1b] leading-snug">{errorDetail}</span>
-                        </div>
-                      )}
-
-                      {/* Failed step: show timestamp from matched action */}
-                      {visual === 'failed' && matchedAction?.executed_at && (
-                        <div className="text-[10px] text-[#b0b7c3] mt-1">
-                          Failed {new Date(matchedAction.executed_at).toLocaleString(undefined, {
-                            month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit',
-                          })}
-                        </div>
-                      )}
-
-                      {/* Completed step: show timestamp from matched action */}
-                      {visual === 'completed' && matchedAction?.executed_at && (
-                        <div className="text-[10px] text-[#b0b7c3] mt-1">
-                          {new Date(matchedAction.executed_at).toLocaleString(undefined, {
-                            month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit',
-                          })}
-                        </div>
-                      )}
-
-                      {/* Escalated step: inline note */}
-                      {visual === 'escalated' && (
-                        <div className="mt-1.5 flex items-center gap-1.5 bg-[#fffbeb] border border-[#fde68a] rounded px-2.5 py-1.5">
-                          <WarningFilled className="text-[11px] text-[#f59e0b] shrink-0" />
-                          <span className="text-[11px] text-[#92400e] leading-snug">Awaiting human review</span>
-                        </div>
-                      )}
-
-                      {/* Current step with pending approval */}
-                      {visual === 'current' && matchedAction?.status === 'PENDING_APPROVAL' && (
-                        <div className="mt-1.5 flex items-center gap-1.5 bg-[#f8f9fa] border border-[#e5e8ec] rounded px-2.5 py-1.5">
-                          <ClockCircleOutlined className="text-[11px] text-[#7b8294] shrink-0" />
-                          <span className="text-[11px] text-[#3b4055] leading-snug">Awaiting approval</span>
-                        </div>
-                      )}
-
-                      {/* Regulatory note — inline, concise, neutral color */}
-                      {step.regulatory_basis && visual !== 'failed' && (
-                        <Tooltip title={step.regulatory_basis}>
-                          <span className="inline-flex items-center gap-1 text-[10px] text-[#b0b7c3] mt-1 cursor-help">
-                            <SafetyOutlined className="text-[9px]" />
-                            {step.regulatory_basis.length > 55
-                              ? step.regulatory_basis.slice(0, 55) + '...'
-                              : step.regulatory_basis}
-                          </span>
-                        </Tooltip>
-                      )}
-                    </>
                   )}
-                </div>
+                </button>
               </div>
             );
           })}
         </div>
-
-        {/* ── Execution Log (compact, secondary) ── */}
-        {seq.actions.length > 0 && (
-          <div className="mt-6 pt-5 border-t border-[#f1f5f9]">
-            <h3 className="text-[11px] font-semibold text-[#b0b7c3] uppercase tracking-wider m-0 mb-2">
-              Execution Log
-            </h3>
-            <div className="space-y-px">
-              {seq.actions.map((action) => (
-                <div
-                  key={action.id}
-                  className="flex items-center justify-between px-2.5 py-1.5 text-[11px]"
-                >
-                  <div className="flex items-center gap-2 min-w-0">
-                    <ActionStatusDot status={action.status} />
-                    <span className="text-[#3b4055] font-medium truncate">
-                      {ACTION_TYPE_LABELS[action.action_type] || action.action_type}
-                    </span>
-                    <span className="text-[#b0b7c3] shrink-0">
-                      {(action.executed_at || action.scheduled_at) && new Date(action.executed_at || action.scheduled_at!).toLocaleString(undefined, {
-                        month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit',
-                      })}
-                    </span>
-                  </div>
-                  <span className={`font-medium shrink-0 ml-2 ${
-                    action.status === 'SUCCEEDED' ? 'text-[#22c55e]' :
-                    action.status === 'FAILED' || action.status === 'DENIED' ? 'text-[#ef4444]' :
-                    action.status === 'UNRESOLVED' ? 'text-[#f59e0b]' :
-                    'text-[#7b8294]'
-                  }`}>
-                    {ACTION_STATUS_LABELS[action.status] || action.status}
-                  </span>
-                </div>
-              ))}
-            </div>
-          </div>
-        )}
 
         {/* ── Agent Reasoning (collapsible) ── */}
         {seq.agent_reasoning && (
@@ -1021,80 +918,173 @@ function SequenceDetail({
             )}
           </div>
         )}
+
+        {/* ── Email messages — one receipt/draft per email action ── */}
+        {emailActions.length > 0 && (
+          <div className="mt-5 pt-5 border-t border-[#f0f0f0]">
+            <div className="flex items-baseline justify-between mb-3">
+              <h3 className="text-[13px] font-semibold text-[#1b1f2b] m-0">Email messages</h3>
+              <span className="text-[11px] text-[#9aa3b2]">{emailActions.length} {emailActions.length === 1 ? 'message' : 'messages'}</span>
+            </div>
+            <div className="space-y-3">
+              {emailActions.map((action, index) => {
+                const outcome = action.outcome && typeof action.outcome === 'object'
+                  ? action.outcome as Record<string, unknown>
+                  : null;
+                const storedDraft = (outcome?.email_draft as { subject: string; body: string } | undefined)
+                  || (index === 0 ? seq.agent_email_draft || undefined : undefined);
+                const draft = emailEdits[action.id] || storedDraft;
+                const recipient = (outcome?.customer_email as string | undefined) || seq.customer_email;
+                const isPending = action.status === 'PENDING_APPROVAL' && emailActionState === 'idle';
+                const isSending = action.status === 'PENDING_APPROVAL' && emailActionState === 'loading';
+                const isSent = action.status === 'SUCCEEDED' || (action.status === 'PENDING_APPROVAL' && emailActionState === 'approved');
+                const isDenied = action.status === 'DENIED' || (action.status === 'PENDING_APPROVAL' && emailActionState === 'denied');
+                const label = isSent ? 'Sent' : isDenied ? 'Denied' : isSending ? 'Sending' : 'Review needed';
+                const labelClass = isSent ? 'bg-[#ecfdf3] text-[#16803c] ring-[#bbf7d0]'
+                  : isDenied ? 'bg-[#fef2f2] text-[#c24141] ring-[#fecaca]'
+                  : 'bg-[#fffbeb] text-[#a16207] ring-[#fde68a]';
+                const sentAt = action.executed_at || action.scheduled_at;
+
+                return (
+                  <div key={action.id} className="rounded-lg border border-[#e5e8ec] bg-white p-3.5">
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="flex min-w-0 items-center gap-2">
+                        {isSent ? <CheckCircleFilled className="text-[15px] text-[#22a55a]" /> :
+                         isDenied ? <CloseCircleFilled className="text-[15px] text-[#ef4444]" /> :
+                         <MailOutlined className="text-[15px] text-[#528ff0]" />}
+                        <div className="min-w-0">
+                          <div className="text-[12px] font-semibold text-[#242b38]">{index === 0 ? 'Recovery email' : `Recovery email ${index + 1}`}</div>
+                          {sentAt && <div className="mt-0.5 text-[10px] text-[#9aa3b2]">{new Date(sentAt).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}</div>}
+                        </div>
+                      </div>
+                      <span className={`shrink-0 rounded-full px-1.5 py-0.5 text-[10px] font-semibold ring-1 ring-inset ${labelClass}`}>{label}</span>
+                    </div>
+
+                    <div className="mt-3 rounded-md border border-[#edf0f3] bg-[#fbfcfd] px-3 py-2.5">
+                      <div className="flex items-center justify-between gap-3">
+                        <div className="text-[10px] text-[#9aa3b2]">To: {recipient}</div>
+                        {isPending && editingEmailId !== action.id && (
+                          <button
+                            onClick={() => {
+                              if (storedDraft) setEmailEdits((current) => ({ ...current, [action.id]: current[action.id] || storedDraft }));
+                              setEditingEmailId(action.id);
+                            }}
+                            disabled={!draft}
+                            className="inline-flex items-center gap-1 text-[11px] font-medium text-[#528FF0] bg-transparent border-0 cursor-pointer hover:text-[#2563eb] disabled:opacity-50 disabled:cursor-not-allowed"
+                          >
+                            <EditOutlined /> Edit email
+                          </button>
+                        )}
+                      </div>
+                      {draft && editingEmailId === action.id ? (
+                        <div className="mt-2 space-y-2">
+                          <input
+                            value={draft.subject}
+                            onChange={(event) => setEmailEdits((current) => ({
+                              ...current,
+                              [action.id]: { ...draft, subject: event.target.value },
+                            }))}
+                            className="w-full rounded-md border border-[#dbe3ec] bg-white px-2.5 py-1.5 text-[12px] font-semibold text-[#293241] outline-none focus:border-[#528ff0]"
+                            aria-label="Email subject"
+                          />
+                          <textarea
+                            value={draft.body}
+                            onChange={(event) => setEmailEdits((current) => ({
+                              ...current,
+                              [action.id]: { ...draft, body: event.target.value },
+                            }))}
+                            className="min-h-32 w-full resize-y rounded-md border border-[#dbe3ec] bg-white px-2.5 py-2 text-[11.5px] leading-[1.6] text-[#697588] outline-none focus:border-[#528ff0]"
+                            aria-label="Email body"
+                          />
+                          <div className="flex justify-end gap-2">
+                            <button onClick={() => setEditingEmailId(null)} className="rounded-md border border-[#dbe3ec] bg-white px-2.5 py-1 text-[11px] font-semibold text-[#687385] cursor-pointer">Cancel</button>
+                            <button
+                              disabled={savingEmailId === action.id || !draft.subject.trim() || !draft.body.trim()}
+                              onClick={async () => {
+                                setSavingEmailId(action.id);
+                                try {
+                                  const saved = await updateEmailDraft(action.id, draft);
+                                  setEmailEdits((current) => ({ ...current, [action.id]: { subject: saved.subject, body: saved.body } }));
+                                  setEditingEmailId(null);
+                                  message.success('Email draft saved');
+                                } catch {
+                                  message.error('Could not save the email draft');
+                                } finally {
+                                  setSavingEmailId(null);
+                                }
+                              }}
+                              className="rounded-md border-0 bg-[#1b1f2b] px-2.5 py-1 text-[11px] font-semibold text-white cursor-pointer disabled:cursor-not-allowed disabled:opacity-50"
+                            >{savingEmailId === action.id ? 'Saving…' : 'Save changes'}</button>
+                          </div>
+                        </div>
+                      ) : draft ? (
+                        <>
+                          <div className="mt-1 text-[12px] font-semibold text-[#293241]">{draft.subject}</div>
+                          <div className="mt-2 border-t border-[#edf0f3] pt-2 text-[11.5px] leading-[1.6] whitespace-pre-line text-[#697588]">{draft.body}</div>
+                        </>
+                      ) : (
+                        <div className="mt-1 text-[11.5px] text-[#7b8294]">Message copy is not available yet.</div>
+                      )}
+                    </div>
+
+                    {isPending && (
+                      <div className="mt-3 flex gap-2">
+                        <button
+                          onClick={async () => {
+                            setEmailActionState('loading');
+                            try {
+                              await onApproveEmail(seq, action.id);
+                              setEmailActionState('approved');
+                            } catch {
+                              setEmailActionState('idle');
+                            }
+                          }}
+                          className="flex-1 rounded-md border-0 bg-[#1b1f2b] px-3 py-1.5 text-[11px] font-semibold text-white cursor-pointer hover:opacity-90"
+                        >Approve & Send</button>
+                        <button
+                          onClick={async () => {
+                            setEmailActionState('loading');
+                            try {
+                              await onDenyEmail(seq, action.id);
+                              setEmailActionState('denied');
+                            } catch {
+                              setEmailActionState('idle');
+                            }
+                          }}
+                          className="flex-1 rounded-md border border-[#e5e8ec] bg-white px-3 py-1.5 text-[11px] font-semibold text-[#c24141] cursor-pointer hover:bg-[#fef2f2]"
+                        >Deny</button>
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        )}
       </div>
 
       {/* ── Sticky footer ── */}
-      {!isTerminal && (
+      {!isTerminal && statusInfo.status !== 'awaiting_approval' && (
         <div className="border-t border-[#e5e8ec] bg-white shrink-0">
-          {statusInfo.status === 'awaiting_approval' ? (
-            <div>
-              {emailDraft && (
-                <div className="mx-6 mt-4 mb-2 bg-[#f8f9fa] border border-[#e5e8ec] rounded-lg">
-                  <div
-                    className="flex items-center gap-2 px-3 py-2.5 cursor-pointer select-none"
-                    onClick={() => setEmailPreviewOpen(v => !v)}
-                  >
-                    <MailOutlined className="text-[13px] text-[#7b8294]" />
-                    <span className="text-[12px] font-semibold text-[#1b1f2b]">Email Preview</span>
-                    {customerEmail && (
-                      <span className="text-[11px] text-[#7b8294]">
-                        — {customerEmail.replace(/(.{2}).*(@.*)/, '$1***$2')}
-                      </span>
-                    )}
-                    <span className="ml-auto text-[11px] text-[#7b8294]">
-                      {emailPreviewOpen ? <DownOutlined /> : <RightOutlined />}
-                    </span>
-                  </div>
-                  {emailPreviewOpen && (
-                    <div className="border-t border-[#e5e8ec]">
-                      <div className="bg-white px-3 py-2 border-b border-[#e5e8ec]">
-                        <span className="text-[12px] font-medium text-[#1b1f2b]">{emailDraft.subject}</span>
-                      </div>
-                      <div className="bg-white px-3 py-2.5 text-[12px] text-[#3b4055] leading-relaxed whitespace-pre-wrap max-h-[120px] overflow-y-auto rounded-b-lg">
-                        {emailDraft.body}
-                      </div>
-                    </div>
-                  )}
-                </div>
-              )}
-              <div className="flex items-center gap-3 px-6 py-3">
-                <Button
-                  type="primary"
-                  icon={<CheckOutlined />}
-                  loading={loading === seq.event_id}
-                  onClick={() => onApproveEmail(seq)}
-                  style={{ flex: 1, backgroundColor: '#1b1f2b', borderColor: '#1b1f2b' }}
-                >
-                  Approve & Send
-                </Button>
-                <Button
-                  danger
-                  ghost
-                  icon={<CloseCircleFilled />}
-                  loading={loading === seq.event_id}
-                  onClick={() => onDenyEmail(seq)}
-                  style={{ flex: 1 }}
-                >
-                  Deny
-                </Button>
-              </div>
-            </div>
-          ) : statusInfo.status === 'escalated' ? (
-            <div className="flex items-center gap-2 text-[13px] text-[#92400e]">
+          {statusInfo.status === 'escalated' ? (
+            <div className="flex items-center gap-2 text-[13px] text-[#92400e] px-6 py-4">
               <WarningFilled className="text-[#f59e0b]" />
               <span>Escalated — awaiting human review</span>
             </div>
           ) : (
-            <div className="flex gap-2">
+            <div className="flex gap-2 px-6 py-4">
               <Button
                 type="primary"
                 icon={statusInfo.status === 'not_started' ? <PlayCircleOutlined /> : <ArrowRightOutlined />}
                 loading={loading === seq.event_id}
+                disabled={isWaitingForCadence}
                 onClick={() => statusInfo.status === 'not_started' ? onStart(seq.event_id) : onAdvance(seq.event_id)}
                 className="flex-1"
               >
                 {statusInfo.status === 'not_started'
                   ? 'Start Recovery Sequence'
+                  : isWaitingForCadence && activeWaitDeadline
+                    ? `Waiting until ${formatWaitDeadline(activeWaitDeadline)}`
                   : `Advance — ${statusInfo.nextAction || 'Next step'}`}
               </Button>
               {statusInfo.status === 'blocked' ? (
@@ -1105,15 +1095,6 @@ function SequenceDetail({
                     loading={loading === seq.event_id}
                   >
                     Retry step
-                  </Button>
-                </Tooltip>
-              ) : statusInfo.status !== 'not_started' ? (
-                <Tooltip title="Close this sequence without further action">
-                  <Button
-                    icon={<CheckOutlined />}
-                    onClick={() => message.info('Marked as resolved')}
-                  >
-                    Mark resolved
                   </Button>
                 </Tooltip>
               ) : null}
@@ -1147,20 +1128,5 @@ function SequenceDetail({
         </div>
       )}
     </div>
-  );
-}
-
-function ActionStatusDot({ status }: { status: string }) {
-  const color =
-    status === 'SUCCEEDED' ? '#22c55e' :
-    status === 'FAILED' || status === 'DENIED' ? '#ef4444' :
-    status === 'UNRESOLVED' ? '#f59e0b' :
-    '#9ca3af';
-
-  return (
-    <span
-      className="inline-block w-1.5 h-1.5 rounded-full shrink-0"
-      style={{ backgroundColor: color }}
-    />
   );
 }

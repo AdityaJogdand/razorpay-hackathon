@@ -121,7 +121,15 @@ Analyze this failure and respond with a JSON object:
 }}
 
 If you propose RETRY, suggest optimal retry timing in retry_schedule_hours.
-If you propose CONTACT_EMAIL or REAUTH_REQUEST, draft a professional, concise email.
+If you propose CONTACT_EMAIL or REAUTH_REQUEST, draft a professional email following this exact format:
+- Subject: clear, concise, no internal IDs (e.g. "Action needed — update your payment method")
+- Body MUST use this structure with blank lines between paragraphs:
+  "Hi,\\n\\nFirst paragraph about what happened.\\n\\nSecond paragraph about what to do.\\n\\n[Action link text]\\n\\nClosing line.\\n\\nThanks,\\nMerchant Name"
+- Use friendly merchant name (e.g. "Demo 001" not "merchant_demo_001")
+- Format amounts as ₹X,XXX (e.g. ₹4,999 not ₹4999.0)
+- NEVER include internal IDs (pay_xxx, txn_xxx, evt_xxx, cust_xxx, tok_xxx)
+- NEVER use "[Your Name]" — use the merchant name
+- NEVER put the entire email in one paragraph
 If you propose ESCALATE_HUMAN, explain why automated handling isn't safe.
 """
 
@@ -215,13 +223,19 @@ async def get_agent_proposal(
         if proposed_action == "RETRY" and not retry_schedule:
             retry_schedule = [4, 24, 48]
 
+        # Scrub LLM email draft through guardrails (lazy import to avoid circular)
+        llm_email_draft = parsed.get("email_draft")
+        if llm_email_draft and isinstance(llm_email_draft, dict):
+            from backend.guardrail.engine import scrub_email_content
+            llm_email_draft = scrub_email_content(llm_email_draft)
+
         return AgentProposal(
             failure_event_id=failure_event_id,
             failure_class=failure_class,
             proposed_action=proposed_action,
             reasoning=parsed.get("reasoning", "No reasoning provided"),
             retry_schedule=retry_schedule,
-            email_draft=parsed.get("email_draft"),
+            email_draft=llm_email_draft,
             confidence=float(parsed.get("confidence", 0.5)),
             raw_llm_response=raw_text,
         )

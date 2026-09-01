@@ -29,8 +29,21 @@ function extractEmails(events: DashboardEvent[]): EmailEntry[] {
   for (const e of events) {
     if (!e.agent?.email_draft) continue;
 
-    const isSuppressed = e.suppressions?.length > 0 || e.outcome === 'suppressed';
-    const suppressionReason = e.suppressions?.[0]?.reason;
+    // Only count email-related suppressions — ignore RETRY suppressions
+    const emailSuppression = e.suppressions?.find(s =>
+      s.action_type === 'CONTACT_EMAIL' || s.action_type === 'REAUTH_REQUEST'
+    );
+    // Check if the email action itself was denied/suppressed
+    const emailAction = e.actions?.find(a =>
+      a.action_type === 'CONTACT_EMAIL' || a.action_type === 'REAUTH_REQUEST'
+    );
+    const emailDenied = emailAction?.status === 'DENIED' || emailAction?.status === 'SUPPRESSED';
+    const isSuppressed = Boolean(emailSuppression) || emailDenied;
+    const suppressionReason = emailSuppression?.reason || (emailDenied ? 'Denied by reviewer' : undefined);
+
+    // Determine actual status from action
+    const emailSent = emailAction?.status === 'SUCCEEDED';
+    const emailPending = emailAction?.status === 'PENDING_APPROVAL' || emailAction?.status === 'SCHEDULED';
 
     emails.push({
       id: e.id,
@@ -41,7 +54,7 @@ function extractEmails(events: DashboardEvent[]): EmailEntry[] {
       failure_class: e.failure_class,
       subject: e.agent.email_draft.subject,
       body: e.agent.email_draft.body,
-      status: isSuppressed ? 'suppressed' : 'sent',
+      status: isSuppressed ? 'suppressed' : emailSent ? 'sent' : emailPending ? 'sent' : 'sent',
       suppression_reason: suppressionReason,
       failed_at: e.failed_at,
     });

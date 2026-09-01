@@ -26,6 +26,7 @@ from backend.models.enums import ActionType, ActionStatus, LedgerEventType
 from backend.models.tables import FailureEvent, Action, ConfigVersion, Suppression, AuditLedger
 from backend.agent.service import get_agent_proposal
 from backend.core.security import validate_uuid
+from backend.guardrail.engine import scrub_email_content
 from backend.guardrail.shacl_engine import validate_proposal_shacl, get_shacl_report
 from backend.execution.service import execute_action
 from backend.ledger.service import append as ledger_append
@@ -249,15 +250,20 @@ async def process_with_agent(
         email_to_send = guardrail_result.final_email_draft or proposal.email_draft
         if not email_to_send and event.customer_email:
             amount_rupees = event.amount_paise / 100
-            email_to_send = {
-                "subject": f"Payment update needed for {event.merchant_id}",
+            merchant_name = event.merchant_id.replace("merchant_", "").replace("_", " ").title() if event.merchant_id else "your service provider"
+            email_to_send = scrub_email_content({
+                "subject": f"Action needed — update your payment method",
                 "body": (
                     f"Hi,\n\n"
-                    f"Your recent payment of ₹{amount_rupees:,.0f} could not be processed.\n\n"
-                    f"Please update your payment method to continue your service.\n\n"
-                    f"Best regards,\n{event.merchant_id} Billing"
+                    f"We tried to process your payment of ₹{amount_rupees:,.0f} for "
+                    f"{merchant_name}, but it could not be completed.\n\n"
+                    f"This can happen if a card has expired or your bank declined "
+                    f"the charge. You can update your payment method here:\n\n"
+                    f"[Update payment method]\n\n"
+                    f"Once updated, your payment will be retried automatically.\n\n"
+                    f"Thanks,\n{merchant_name}"
                 ),
-            }
+            })
 
         at = ActionType.CONTACT_EMAIL if final_action_type == "CONTACT_EMAIL" else ActionType.REAUTH_REQUEST
         contact_num = prior_contacts + 1

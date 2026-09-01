@@ -9,6 +9,9 @@ import EmailOutreach from './pages/EmailOutreach';
 import PaymentSimulator from './pages/PaymentSimulator';
 import AuditLedger from './pages/AuditLedger';
 import MandateSequencer from './pages/MandateSequencer';
+import CheckoutRecovery from './pages/CheckoutRecovery';
+import VoiceRecovery from './pages/VoiceRecovery';
+
 
 const themeConfig = {
   token: {
@@ -38,7 +41,6 @@ function App() {
       <BrowserRouter>
         <Routes>
           <Route element={<AppLayout />}>
-            <Route path="/" element={<DecisionTrace />} />
             <Route path="/trace" element={<DecisionTrace />} />
             <Route path="/batch" element={<BatchSummary />} />
             <Route path="/exceptions" element={<ExceptionQueue />} />
@@ -47,6 +49,8 @@ function App() {
             <Route path="/simulate" element={<PaymentSimulator />} />
             <Route path="/ledger" element={<AuditLedger />} />
             <Route path="/mandates" element={<MandateSequencer />} />
+            <Route path="/checkout" element={<CheckoutRecovery />} />
+            <Route path="/voice" element={<VoiceRecovery />} />
           </Route>
         </Routes>
       </BrowserRouter>
