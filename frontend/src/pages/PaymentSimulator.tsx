@@ -28,6 +28,7 @@ import {
   type DashboardEvent,
   type CheckoutEvent,
   fetchRecurringFailures,
+  fetchDeclineCodes,
   type SubscriptionFailure,
   type SubscriptionStats,
 } from '../api/dashboard';
@@ -36,25 +37,7 @@ import {
 // Types
 // ═══════════════════════════════════════════════
 
-type FailureType = 'SOFT' | 'HARD' | 'MANDATE' | 'UNKNOWN';
 type SimSection = 'payment' | 'checkout' | 'subscription';
-
-const FAILURE_TYPES: { key: FailureType; label: string; desc: string; color: string; bg: string }[] = [
-  { key: 'SOFT', label: 'Soft Decline', desc: 'Temporary issue (timeout, insufficient funds). Agent retries automatically.', color: '#d97706', bg: '#fffbeb' },
-  { key: 'HARD', label: 'Hard Decline', desc: 'Permanent issue (card expired). Agent sends recovery email via SMTP.', color: '#ef4444', bg: '#fef2f2' },
-  { key: 'MANDATE', label: 'Mandate Failure', desc: 'UPI/e-mandate lifecycle issue. Triggers NPCI-compliant recovery sequence.', color: '#7c3aed', bg: '#f5f3ff' },
-  { key: 'UNKNOWN', label: 'Unknown Error', desc: 'Unrecognized code. Escalated to human review queue.', color: '#6b7280', bg: '#f9fafb' },
-];
-
-const MANDATE_SUB_TYPES = [
-  { value: 'NOT_FOUND', label: 'U40 — Mandate Not Found' },
-  { value: 'REVOKED', label: 'U37 — Mandate Revoked' },
-  { value: 'PAUSED', label: 'U38 — Mandate Paused' },
-  { value: 'EXPIRED', label: 'U39 — Mandate Expired' },
-  { value: 'DEBIT_LIMIT', label: 'U41 — Debit Limit Breached' },
-  { value: 'PRE_DEBIT', label: 'U47 — Pre-Debit Not Sent' },
-  { value: 'STOP_PAYMENT', label: 'R0 — Stop Payment Order' },
-];
 
 const CHECKOUT_STAGES = [
   { value: 'LANDING', label: 'Drop at landing page' },
@@ -68,8 +51,8 @@ const CHECKOUT_STAGES = [
 interface SimResult {
   simulation: {
     transaction_id: string;
-    failure_type: string;
-    mandate_sub_type: string | null;
+    decline_code: string;
+    decline_label: string;
     amount_paise: number;
     amount_display: string;
     customer_email: string;
@@ -426,16 +409,23 @@ interface SectionProps {
 
 function PaymentSection({ addToHistory, updateHistoryStatus }: SectionProps) {
   const navigate = useNavigate();
-  const [selectedType, setSelectedType] = useState<FailureType>('SOFT');
-  const [mandateSubType, setMandateSubType] = useState('NOT_FOUND');
+  const [declineCodes, setDeclineCodes] = useState<Array<{ code: string; label: string; description: string; instrument: string }>>([]);
+  const [selectedCode, setSelectedCode] = useState('');
   const [amount, setAmount] = useState(4999);
-  const [email, setEmail] = useState('ajogdand112@gmail.com');
+  const [email, setEmail] = useState('ajogdand118@gmail.com');
   const [phase, setPhase] = useState<PaymentPhase>('input');
   const [result, setResult] = useState<SimResult | null>(null);
   const [recoveryResult, setRecoveryResult] = useState<{ amount_display: string; payment_id: string } | null>(null);
   const [emailPreviewOpen, setEmailPreviewOpen] = useState(true);
   const [emailDraft, setEmailDraft] = useState<{ subject: string; body: string } | null>(null);
   const [loadingStep, setLoadingStep] = useState(0);
+
+  useEffect(() => {
+    fetchDeclineCodes().then(codes => {
+      setDeclineCodes(codes);
+      if (codes.length > 0) setSelectedCode(codes[0].code);
+    }).catch(() => {});
+  }, []);
 
   const LOADING_STEPS = [
     { label: 'Ingesting payment failure...', color: '#ef4444' },
@@ -462,8 +452,7 @@ function PaymentSection({ addToHistory, updateHistoryStatus }: SectionProps) {
 
     try {
       const res = await simulatePayment({
-        failure_type: selectedType,
-        mandate_sub_type: selectedType === 'MANDATE' ? mandateSubType : undefined,
+        decline_code: selectedCode,
         amount_paise: Math.round(amount * 100),
         customer_email: email,
       });
@@ -582,35 +571,39 @@ function PaymentSection({ addToHistory, updateHistoryStatus }: SectionProps) {
       {/* Left: Input */}
       <div>
         <div className="flex items-center justify-between mb-3">
-          <div className="text-[11px] font-semibold text-[#9ca3af] uppercase tracking-wider">Select Failure Type</div>
+          <div className="text-[11px] font-semibold text-[#9ca3af] uppercase tracking-wider">Select Decline Code</div>
           {phase !== 'input' && (
             <button onClick={handleReset} className="px-3 py-1 text-[11px] font-medium text-[#7b8294] bg-white border border-[#e5e8ec] rounded-lg hover:bg-[#f8fafc] cursor-pointer transition-colors">
               Reset
             </button>
           )}
         </div>
-        <div className="grid grid-cols-2 gap-2 mb-4">
-          {FAILURE_TYPES.map((ft) => (
-            <div
-              key={ft.key}
-              onClick={() => { setSelectedType(ft.key); if (phase !== 'input') handleReset(); }}
-              className={`p-3 rounded-lg border cursor-pointer transition-all ${
-                selectedType === ft.key ? 'border-2 shadow-sm' : 'border-[#e5e8ec] hover:border-[#c4c9d4]'
-              }`}
-              style={selectedType === ft.key ? { borderColor: ft.color, backgroundColor: ft.bg } : {}}
-            >
-              <div className="text-[13px] font-semibold" style={{ color: ft.color }}>{ft.label}</div>
-              <div className="text-[11px] text-[#7b8294] mt-0.5 leading-snug">{ft.desc}</div>
-            </div>
-          ))}
+        <div className="mb-4">
+          <Select
+            value={selectedCode}
+            onChange={(v) => { setSelectedCode(v); if (phase !== 'input') handleReset(); }}
+            style={{ width: '100%' }}
+            size="large"
+            showSearch
+            optionFilterProp="label"
+            options={declineCodes.map(dc => ({
+              value: dc.code,
+              label: `${dc.label} — ${dc.description}`,
+            }))}
+          />
+          {selectedCode && (() => {
+            const dc = declineCodes.find(c => c.code === selectedCode);
+            return dc ? (
+              <div className="mt-2 px-3 py-2 bg-[#f8fafc] rounded-lg border border-[#e5e8ec]">
+                <div className="flex items-center gap-2">
+                  <span className="font-mono text-[11px] text-[#9ca3af]">{dc.code}</span>
+                  <span className="text-[10px] px-1.5 py-0.5 rounded bg-[#f0f0f0] text-[#6b7280] font-medium">{dc.instrument}</span>
+                </div>
+                <div className="text-[12px] text-[#374151] mt-1">{dc.description}</div>
+              </div>
+            ) : null;
+          })()}
         </div>
-
-        {selectedType === 'MANDATE' && (
-          <div className="mb-4">
-            <div className="text-[11px] font-semibold text-[#9ca3af] uppercase tracking-wider mb-1.5">NPCI Decline Code</div>
-            <Select value={mandateSubType} onChange={setMandateSubType} options={MANDATE_SUB_TYPES} style={{ width: '100%' }} size="middle" />
-          </div>
-        )}
 
         <div className="grid grid-cols-2 gap-3 mb-4">
           <div>
@@ -972,7 +965,7 @@ function CheckoutSection({ addToHistory, updateHistoryStatus }: SectionProps) {
   const navigate = useNavigate();
   const [stage, setStage] = useState('PAYMENT');
   const [amount, setAmount] = useState(2499);
-  const [email, setEmail] = useState('ajogdand112@gmail.com');
+  const [email, setEmail] = useState('ajogdand118@gmail.com');
   const [product, setProduct] = useState('Annual Premium Plan');
   const [phase, setPhase] = useState<CheckoutPhase>('input');
   const [simResult, setSimResult] = useState<CheckoutSimResult | null>(null);
@@ -1362,11 +1355,11 @@ function SubscriptionSection() {
   const handleSimulateMultiple = async () => {
     setSimulating(true);
     try {
-      const email = `ajogdand112+${Date.now()}@gmail.com`;
-      const types: FailureType[] = ['SOFT', 'SOFT', 'HARD'];
-      for (const ft of types) {
+      const email = `ajogdand118+${Date.now()}@gmail.com`;
+      const codes = ['payment_failed_because_gateway_timeout', 'payment_failed_because_insufficient_balance', 'payment_failed_because_card_expired'];
+      for (const code of codes) {
         await simulatePayment({
-          failure_type: ft,
+          decline_code: code,
           amount_paise: 99900,
           customer_email: email,
         });

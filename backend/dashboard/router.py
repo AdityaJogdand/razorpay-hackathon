@@ -385,6 +385,19 @@ async def resolve_exception(
     if existing.scalar_one_or_none():
         raise HTTPException(status_code=409, detail="Already resolved")
 
+    # If overriding to a specific failure class, update the event
+    override_map = {
+        ResolutionType.OVERRIDE_MANDATE: FailureClass.MANDATE,
+        ResolutionType.OVERRIDE_HARD: FailureClass.HARD,
+        ResolutionType.OVERRIDE_SOFT: FailureClass.SOFT,
+    }
+    if body.resolution_type in override_map:
+        event = (await db.execute(
+            select(FailureEvent).where(FailureEvent.id == event_id)
+        )).scalar_one_or_none()
+        if event:
+            event.failure_class = override_map[body.resolution_type]
+
     resolution = ExceptionResolution(
         failure_event_id=event_id,
         merchant_id=merchant_id,

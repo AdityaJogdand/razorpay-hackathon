@@ -30,73 +30,55 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/simulate", tags=["simulate"])
 
-# ── Presets for each failure type ──
-# Uses REAL taxonomy codes so classification works correctly
+# ── Decline code catalog ──
+# Curated list of real decline codes for simulation — the classifier determines the failure class
 
-FAILURE_PRESETS = {
-    "SOFT": {
-        "error_code": "payment_failed_because_gateway_timeout",
-        "error_description": "Payment failed due to gateway timeout. The issuing bank did not respond in time.",
-        "instrument_type": "CARD",
-    },
-    "HARD": {
-        "error_code": "payment_failed_because_card_expired",
-        "error_description": "The card has expired. Customer must use a different payment method.",
-        "instrument_type": "CARD",
-    },
-    "UNKNOWN": {
-        "error_code": "payment_failed_because_do_not_honor",
-        "error_description": "An unrecognized error occurred during payment processing.",
-        "instrument_type": "UPI",
-    },
-}
+DECLINE_CODE_CATALOG = [
+    # SOFT — transient
+    {"code": "payment_failed_because_gateway_timeout", "label": "Gateway Timeout", "description": "The issuing bank did not respond in time.", "instrument": "CARD"},
+    {"code": "payment_failed_because_insufficient_balance", "label": "Insufficient Balance", "description": "Customer does not have enough funds.", "instrument": "CARD"},
+    {"code": "payment_failed_because_issuer_unavailable", "label": "Issuer Unavailable", "description": "The issuing bank's system is temporarily down.", "instrument": "CARD"},
+    {"code": "payment_failed_because_incorrect_otp", "label": "Incorrect OTP", "description": "Customer entered the wrong OTP during 3DS verification.", "instrument": "CARD"},
+    {"code": "U19", "label": "UPI Timeout", "description": "UPI transaction timed out at NPCI.", "instrument": "UPI"},
+    {"code": "51", "label": "Insufficient Funds (ISO)", "description": "Card declined — insufficient funds in account.", "instrument": "CARD"},
 
-# MANDATE sub-type presets — each maps to a real NPCI code
-MANDATE_PRESETS = {
-    "NOT_FOUND": {
-        "error_code": "U40",
-        "error_description": "Mandate not found at payer PSP. No active mandate exists for this customer.",
-        "instrument_type": "UPI",
-    },
-    "REVOKED": {
-        "error_code": "U37",
-        "error_description": "Mandate has been revoked by the customer. Re-authorization required.",
-        "instrument_type": "UPI",
-    },
-    "PAUSED": {
-        "error_code": "U38",
-        "error_description": "Mandate is currently paused by the customer.",
-        "instrument_type": "UPI",
-    },
-    "EXPIRED": {
-        "error_code": "U39",
-        "error_description": "Mandate has expired. A new mandate must be registered.",
-        "instrument_type": "UPI",
-    },
-    "DEBIT_LIMIT": {
-        "error_code": "U41",
-        "error_description": "Mandate debit limit breached. Amount exceeds the mandate cap.",
-        "instrument_type": "UPI",
-    },
-    "PRE_DEBIT": {
-        "error_code": "U47",
-        "error_description": "Pre-debit notification was not sent before mandate execution.",
-        "instrument_type": "UPI",
-    },
-    "STOP_PAYMENT": {
-        "error_code": "R0",
-        "error_description": "Stop payment order placed by customer on recurring authorization.",
-        "instrument_type": "CARD",
-    },
-}
+    # HARD — permanent
+    {"code": "payment_failed_because_card_expired", "label": "Card Expired", "description": "The card has expired. Customer must use a different card.", "instrument": "CARD"},
+    {"code": "payment_failed_because_card_invalid", "label": "Invalid Card", "description": "The card number is invalid or does not exist.", "instrument": "CARD"},
+    {"code": "payment_failed_because_account_closed", "label": "Account Closed", "description": "The customer's bank account has been closed.", "instrument": "CARD"},
+    {"code": "payment_failed_because_card_lost_or_stolen", "label": "Lost/Stolen Card", "description": "The card has been reported lost or stolen.", "instrument": "CARD"},
+    {"code": "payment_failed_because_invalid_vpa", "label": "Invalid VPA", "description": "The UPI VPA (Virtual Payment Address) is not valid.", "instrument": "UPI"},
+    {"code": "54", "label": "Expired Card (ISO)", "description": "Card network reports the card is expired.", "instrument": "CARD"},
+
+    # MANDATE — UPI/e-mandate lifecycle
+    {"code": "U37", "label": "Mandate Revoked", "description": "Customer revoked their UPI autopay mandate.", "instrument": "UPI"},
+    {"code": "U38", "label": "Mandate Paused", "description": "Customer paused their UPI mandate.", "instrument": "UPI"},
+    {"code": "U39", "label": "Mandate Expired", "description": "The UPI mandate has expired.", "instrument": "UPI"},
+    {"code": "U40", "label": "Mandate Not Found", "description": "No active mandate found at payer PSP.", "instrument": "UPI"},
+    {"code": "U47", "label": "Pre-Debit Not Sent", "description": "Pre-debit notification was not sent before mandate execution.", "instrument": "UPI"},
+    {"code": "R0", "label": "Stop Payment (Recurring)", "description": "Customer placed a stop payment order on recurring authorization.", "instrument": "CARD"},
+
+    # UNKNOWN — ambiguous
+    {"code": "payment_failed_because_do_not_honor", "label": "Do Not Honor", "description": "Bank declined without specific reason.", "instrument": "UPI"},
+    {"code": "payment_failed_because_risk_check_failed", "label": "Risk Check Failed", "description": "Payment flagged by fraud/risk engine.", "instrument": "CARD"},
+    {"code": "05", "label": "Do Not Honor (ISO)", "description": "Issuer declined — most common ambiguous code.", "instrument": "CARD"},
+]
+
+# Build lookup
+_CODE_LOOKUP = {c["code"]: c for c in DECLINE_CODE_CATALOG}
 
 
 class SimulatePaymentRequest(BaseModel):
-    failure_type: str = Field(..., pattern="^(SOFT|HARD|MANDATE|UNKNOWN)$")
-    mandate_sub_type: str | None = Field(default=None)
+    decline_code: str = Field(..., description="Decline code from the catalog")
     amount_paise: int = Field(default=150000, gt=0, le=10000000)
-    customer_email: str = Field(default="ajogdand112@gmail.com")
+    customer_email: str = Field(default="ajogdand118@gmail.com")
     merchant_id: str = Field(default="merch_cloudnine_tech")
+
+
+@router.get("/decline-codes")
+async def list_decline_codes():
+    """Return the catalog of available decline codes for simulation."""
+    return {"codes": DECLINE_CODE_CATALOG}
 
 
 @router.post("/payment")
@@ -111,12 +93,10 @@ async def simulate_payment(
     2. Runs agent pipeline (reasoning + guardrail + execution)
     3. For MANDATE: auto-creates recovery sequence
     """
-    # Pick preset
-    if body.failure_type == "MANDATE":
-        sub_key = body.mandate_sub_type or "NOT_FOUND"
-        preset = MANDATE_PRESETS.get(sub_key, MANDATE_PRESETS["NOT_FOUND"])
-    else:
-        preset = FAILURE_PRESETS[body.failure_type]
+    # Look up decline code from catalog
+    catalog_entry = _CODE_LOOKUP.get(body.decline_code)
+    if not catalog_entry:
+        raise HTTPException(status_code=400, detail=f"Unknown decline code: {body.decline_code}")
 
     txn_id = f"pay_live_{uuid.uuid4().hex[:14]}"
 
@@ -127,10 +107,10 @@ async def simulate_payment(
         subscription_id=f"sub_{hashlib.md5((body.customer_email + body.merchant_id).encode()).hexdigest()[:8]}",
         customer_id=f"cust_{hashlib.md5(body.customer_email.encode()).hexdigest()[:8]}",
         customer_email=body.customer_email,
-        instrument_type=preset["instrument_type"],
+        instrument_type=catalog_entry["instrument"],
         instrument_token=f"tok_{hashlib.md5(body.customer_email.encode()).hexdigest()[:12]}",
-        error_code=preset["error_code"],
-        error_description=preset["error_description"],
+        error_code=catalog_entry["code"],
+        error_description=catalog_entry["description"],
         amount_paise=body.amount_paise,
         currency="INR",
         failed_at=datetime.now(timezone.utc),
@@ -153,7 +133,7 @@ async def simulate_payment(
 
     # Step 3: For MANDATE — auto-create recovery sequence
     mandate_sequence = None
-    if body.failure_type == "MANDATE" or ingest_result.get("failure_class") == "MANDATE":
+    if ingest_result.get("failure_class") == "MANDATE":
         try:
             event_uuid = uuid.UUID(event_id)
             result = await db.execute(
@@ -177,13 +157,13 @@ async def simulate_payment(
     return {
         "simulation": {
             "transaction_id": txn_id,
-            "failure_type": body.failure_type,
-            "mandate_sub_type": body.mandate_sub_type if body.failure_type == "MANDATE" else None,
+            "decline_code": body.decline_code,
+            "decline_label": catalog_entry["label"],
             "amount_paise": body.amount_paise,
             "amount_display": f"\u20B9{body.amount_paise / 100:,.2f}",
             "customer_email": body.customer_email,
-            "error_code": preset["error_code"],
-            "error_description": preset["error_description"],
+            "error_code": catalog_entry["code"],
+            "error_description": catalog_entry["description"],
         },
         "ingest": {
             "event_id": event_id,

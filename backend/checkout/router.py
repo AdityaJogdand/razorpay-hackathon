@@ -102,7 +102,7 @@ DROP_OFF_REASONS = {
 class SimulateCheckoutRequest(BaseModel):
     drop_off_stage: str = Field(..., pattern="^(LANDING|CONTACT|ADDRESS|PAYMENT|INITIATED|FAILED)$")
     amount_paise: int = Field(default=249900, gt=0, le=10000000)
-    customer_email: str = Field(default="ajogdand112@gmail.com")
+    customer_email: str = Field(default="ajogdand118@gmail.com")
     customer_phone: str = Field(default="+91-98765-43210")
     product_name: str = Field(default="StreamBox Premium — Annual Plan")
     merchant_id: str = Field(default="merch_cloudnine_tech")

@@ -173,11 +173,22 @@ export async function denyEmail(actionId: string): Promise<{ action_id: string; 
   return data;
 }
 
+export interface DeclineCode {
+  code: string;
+  label: string;
+  description: string;
+  instrument: string;
+}
+
 export interface SimulatePaymentRequest {
-  failure_type: 'SOFT' | 'HARD' | 'MANDATE' | 'UNKNOWN';
-  mandate_sub_type?: string;
+  decline_code: string;
   amount_paise: number;
   customer_email: string;
+}
+
+export async function fetchDeclineCodes(): Promise<DeclineCode[]> {
+  const { data } = await api.get('/simulate/decline-codes');
+  return data.codes;
 }
 
 export async function simulatePayment(req: SimulatePaymentRequest): Promise<Record<string, unknown>> {

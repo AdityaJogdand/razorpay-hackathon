@@ -318,8 +318,8 @@ export default function SubscriptionRecovery() {
           const StatusIcon = statusObj.icon;
           const hasTriggeredAction = currentStatus !== 'RECOMMENDED';
 
-          // Chronological ordering (Oldest -> Newest)
-          const chronologicalFailures = [...selectedSub.failures].reverse();
+          // Latest first ordering (Newest -> Oldest)
+          const chronologicalFailures = [...selectedSub.failures];
 
           return (
             <div className="space-y-5">
@@ -367,7 +367,11 @@ export default function SubscriptionRecovery() {
                     <div><span className="text-[#9ca3af]">Subscription ID:</span> <div className="font-mono text-[#1b1f2b] mt-0.5">{selectedSub.subscription_id}</div></div>
                   )}
                   <div><span className="text-[#9ca3af]">Unresolved Failures:</span> <div className="text-[#dc2626] font-bold mt-0.5">{selectedSub.failure_count} attempts</div></div>
-                  <div><span className="text-[#9ca3af]">Total Revenue at Risk:</span> <div className="text-[#1b1f2b] font-bold mt-0.5">₹{(selectedSub.total_amount_paise / 100).toLocaleString('en-IN')}</div></div>
+                  <div><span className="text-[#9ca3af]">Total Revenue at Risk:</span> <div className="text-[#1b1f2b] font-bold mt-0.5">₹{(() => {
+                    const recovered = (selectedSub.triggered_action?.status === 'SUCCEEDED' || selectedSub.existing_actions?.some(a => a.status === 'SUCCEEDED'))
+                      ? selectedSub.total_amount_paise : 0;
+                    return ((selectedSub.total_amount_paise - recovered) / 100).toLocaleString('en-IN');
+                  })()}</div></div>
                 </div>
               </div>
 
@@ -463,31 +467,42 @@ export default function SubscriptionRecovery() {
                   {chronologicalFailures.map((f, i) => {
                     const isHard = f.failure_class === 'HARD';
                     const isMandate = f.failure_class === 'MANDATE';
-                    const isRootCause = isHard || isMandate || (i === chronologicalFailures.length - 1 && selectedSub.recommendation.diagnosis === 'structural');
+                    const isRootCause = isHard || isMandate || (i === 0 && selectedSub.recommendation.diagnosis === 'structural');
+                    const isLatest = i === 0;
+                    const isOld = i >= 2;
 
                     return (
                       <div
                         key={f.id || i}
-                        className={`rounded-lg px-4 py-3 border transition-all ${
+                        className={`rounded-lg border transition-all ${
+                          isLatest
+                            ? 'px-5 py-4 shadow-sm'
+                            : isOld
+                              ? 'px-3 py-2'
+                              : 'px-4 py-3'
+                        } ${
                           isRootCause
-                            ? 'border-[#dc2626] bg-[#fef2f2]/40 shadow-2xs'
-                            : 'border-[#e5e8ec] bg-white'
+                            ? 'border-[#dc2626] bg-[#fef2f2]/40'
+                            : isOld
+                              ? 'border-[#f0f0f0] bg-[#fafafa]'
+                              : 'border-[#e5e8ec] bg-white'
                         }`}
+                        style={{ opacity: isLatest ? 1 : isOld ? 0.55 : 0.8 }}
                       >
                         <div className="flex items-center justify-between mb-1">
                           <div className="flex items-center gap-2">
-                            <span className="text-[11px] font-semibold text-[#6b7280]">
-                              Attempt #{i + 1} {i === chronologicalFailures.length - 1 ? '(Latest)' : ''}
+                            <span className={`font-semibold text-[#6b7280] ${isLatest ? 'text-[13px]' : isOld ? 'text-[10px]' : 'text-[11px]'}`}>
+                              Attempt #{chronologicalFailures.length - i} {isLatest ? '(Latest)' : ''}
                             </span>
-                            <span className="font-mono text-[10px] text-[#9ca3af]">{f.transaction_id}</span>
+                            <span className={`font-mono text-[#9ca3af] ${isLatest ? 'text-[11px]' : 'text-[10px]'}`}>{f.transaction_id}</span>
                           </div>
                           <div className="flex items-center gap-1.5">
                             {isRootCause && (
-                              <span className="text-[9px] font-bold uppercase tracking-wider px-1.5 py-0.5 rounded bg-[#dc2626] text-white">
+                              <span className={`font-bold uppercase tracking-wider px-1.5 py-0.5 rounded bg-[#dc2626] text-white ${isLatest ? 'text-[10px]' : 'text-[9px]'}`}>
                                 Root Cause
                               </span>
                             )}
-                            <span className={`text-[10px] font-bold px-2 py-0.5 rounded ${
+                            <span className={`font-bold px-2 py-0.5 rounded ${isLatest ? 'text-[11px]' : 'text-[10px]'} ${
                               isHard ? 'bg-[#dc2626] text-white' : isMandate ? 'bg-[#7c3aed] text-white' : 'bg-[#fffbeb] text-[#d97706] border border-[#fef3c7]'
                             }`}>
                               {f.failure_class === 'HARD' ? 'HARD DECLINE' : f.failure_class === 'MANDATE' ? 'MANDATE DECLINE' : 'SOFT DECLINE'}
@@ -495,13 +510,13 @@ export default function SubscriptionRecovery() {
                           </div>
                         </div>
 
-                        <div className="flex items-center justify-between text-[12px] mt-1">
+                        <div className={`flex items-center justify-between mt-1 ${isLatest ? 'text-[14px]' : isOld ? 'text-[11px]' : 'text-[12px]'}`}>
                           <span className="font-bold text-[#1b1f2b]">₹{(f.amount_paise / 100).toLocaleString('en-IN')}</span>
                           <span className="text-[#374151] font-medium">{f.decline_reason || f.decline_code}</span>
                         </div>
 
                         {f.failed_at && (
-                          <div className="text-[10px] text-[#9ca3af] mt-1 pt-1 border-t border-[#f0f0f0]">
+                          <div className={`text-[#9ca3af] mt-1 pt-1 border-t border-[#f0f0f0] ${isLatest ? 'text-[11px]' : 'text-[10px]'}`}>
                             Failed at {new Date(f.failed_at).toLocaleString()}
                           </div>
                         )}
