@@ -11,8 +11,9 @@ import {
   ThunderboltOutlined,
   ShoppingCartOutlined,
   CreditCardOutlined,
-  SwapOutlined,
   DollarOutlined,
+  SyncOutlined,
+  ExclamationCircleFilled,
 } from '@ant-design/icons';
 import {
   simulatePayment,
@@ -26,6 +27,9 @@ import {
   fetchCheckoutEvents,
   type DashboardEvent,
   type CheckoutEvent,
+  fetchRecurringFailures,
+  type SubscriptionFailure,
+  type SubscriptionStats,
 } from '../api/dashboard';
 
 // ═══════════════════════════════════════════════
@@ -33,7 +37,7 @@ import {
 // ═══════════════════════════════════════════════
 
 type FailureType = 'SOFT' | 'HARD' | 'MANDATE' | 'UNKNOWN';
-type SimSection = 'payment' | 'checkout';
+type SimSection = 'payment' | 'checkout' | 'subscription';
 
 const FAILURE_TYPES: { key: FailureType; label: string; desc: string; color: string; bg: string }[] = [
   { key: 'SOFT', label: 'Soft Decline', desc: 'Temporary issue (timeout, insufficient funds). Agent retries automatically.', color: '#d97706', bg: '#fffbeb' },
@@ -140,7 +144,7 @@ type CheckoutPhase = 'input' | 'simulating' | 'abandoned' | 'previewing' | 'send
 // ── Shared history entry ──
 interface HistoryEntry {
   id: string;
-  type: 'payment' | 'checkout';
+  type: 'payment' | 'checkout' | 'subscription';
   label: string;
   amount_display: string;
   failure_class: string;
@@ -270,7 +274,7 @@ export default function PaymentSimulator() {
       {/* Header */}
       <div className="mb-5">
         <h1 className="text-[22px] font-bold text-[#1b1f2b] m-0">Simulation Hub</h1>
-        <p className="text-[13px] text-[#7b8294] m-0 mt-1">Full lifecycle demo — simulate failures, review agent decisions, approve emails, recover payments</p>
+        <p className="text-[13px] text-[#7b8294] m-0 mt-1">End-to-end recovery pipeline — simulate failures, review agent decisions, approve emails, recover payments</p>
       </div>
 
       {/* Section tabs */}
@@ -278,6 +282,7 @@ export default function PaymentSimulator() {
         {[
           { key: 'payment' as SimSection, icon: <CreditCardOutlined />, label: 'Payment Failures', desc: 'Soft, Hard, Mandate, Unknown' },
           { key: 'checkout' as SimSection, icon: <ShoppingCartOutlined />, label: 'Checkout Abandonment', desc: '6-stage funnel recovery' },
+          { key: 'subscription' as SimSection, icon: <SyncOutlined />, label: 'Subscription Failures', desc: 'Recurring failure detection' },
         ].map(tab => (
           <div
             key={tab.key}
@@ -300,7 +305,9 @@ export default function PaymentSimulator() {
       {/* Section content */}
       {activeSection === 'payment'
         ? <PaymentSection addToHistory={addToHistory} updateHistoryStatus={updateHistoryStatus} />
-        : <CheckoutSection addToHistory={addToHistory} updateHistoryStatus={updateHistoryStatus} />
+        : activeSection === 'checkout'
+        ? <CheckoutSection addToHistory={addToHistory} updateHistoryStatus={updateHistoryStatus} />
+        : <SubscriptionSection />
       }
 
       {/* ═══════ Simulation History ═══════ */}
@@ -332,9 +339,11 @@ export default function PaymentSimulator() {
                     <span className={`text-[11px] font-semibold px-2 py-0.5 rounded ${
                       entry.type === 'payment'
                         ? 'text-[#528FF0] bg-[#eff6ff]'
+                        : entry.type === 'subscription'
+                        ? 'text-[#d97706] bg-[#fffbeb]'
                         : 'text-[#7c3aed] bg-[#f5f3ff]'
                     }`}>
-                      {entry.type === 'payment' ? 'Payment' : 'Checkout'}
+                      {entry.type === 'payment' ? 'Payment' : entry.type === 'subscription' ? 'Subscription' : 'Checkout'}
                     </span>
                   </td>
                   <td className="px-4 py-2.5">
@@ -420,7 +429,7 @@ function PaymentSection({ addToHistory, updateHistoryStatus }: SectionProps) {
   const [selectedType, setSelectedType] = useState<FailureType>('SOFT');
   const [mandateSubType, setMandateSubType] = useState('NOT_FOUND');
   const [amount, setAmount] = useState(4999);
-  const [email, setEmail] = useState('demo@razorpay.com');
+  const [email, setEmail] = useState('ajogdand112@gmail.com');
   const [phase, setPhase] = useState<PaymentPhase>('input');
   const [result, setResult] = useState<SimResult | null>(null);
   const [recoveryResult, setRecoveryResult] = useState<{ amount_display: string; payment_id: string } | null>(null);
@@ -458,7 +467,7 @@ function PaymentSection({ addToHistory, updateHistoryStatus }: SectionProps) {
         amount_paise: Math.round(amount * 100),
         customer_email: email,
       });
-      const simResult = res as SimResult;
+      const simResult = (res as unknown) as SimResult;
       setResult(simResult);
       setPhase('result');
 
@@ -488,7 +497,7 @@ function PaymentSection({ addToHistory, updateHistoryStatus }: SectionProps) {
       if (pendingEmail) {
         try {
           const eventsData = await fetchDashboardEvents({ limit: 5 });
-          const matchingEvent = eventsData.events.find((e: Record<string, unknown>) => e.id === simResult.ingest.event_id);
+          const matchingEvent = eventsData.events.find((e: DashboardEvent) => e.id === simResult.ingest.event_id);
           if (matchingEvent?.agent?.email_draft) {
             setEmailDraft(matchingEvent.agent.email_draft);
           }
@@ -509,8 +518,8 @@ function PaymentSection({ addToHistory, updateHistoryStatus }: SectionProps) {
     setPhase('approving');
     try {
       const eventsData = await fetchDashboardEvents({ limit: 5 });
-      const matchingEvent = eventsData.events.find((e: Record<string, unknown>) => e.id === result.ingest.event_id);
-      const actions = (matchingEvent as Record<string, unknown>)?.actions as Array<{ id: string; status: string; action_type: string }> | undefined;
+      const matchingEvent = eventsData.events.find((e: DashboardEvent) => e.id === result.ingest.event_id);
+      const actions = matchingEvent?.actions;
       const pendingAction = actions?.find(
         a => a.status === 'PENDING_APPROVAL' && (a.action_type === 'REAUTH_REQUEST' || a.action_type === 'CONTACT_EMAIL')
       );
@@ -564,7 +573,8 @@ function PaymentSection({ addToHistory, updateHistoryStatus }: SectionProps) {
   const isRecovered = executionOutcome?.status === 'SUCCEEDED' && executionOutcome?.action_type === 'RETRY';
   const isEmailPending = executionOutcome?.status === 'PENDING_APPROVAL';
   const isEscalated = executionOutcome?.action_type === 'ESCALATE_HUMAN';
-  const showApproveButton = isEmailPending && (phase === 'result');
+  const showApproveButton = isEmailPending && (phase === 'result' || phase === 'approving');
+  const showRecoveryButton = (phase === 'approved' || phase === 'recovering');
   const autoRecovered = isRecovered && phase === 'result';
 
   return (
@@ -657,7 +667,7 @@ function PaymentSection({ addToHistory, updateHistoryStatus }: SectionProps) {
         {/* Lifecycle flow indicator */}
         {result && (
           <div className="mt-4 border border-[#e5e8ec] rounded-lg p-3">
-            <div className="text-[10px] font-semibold text-[#9ca3af] uppercase tracking-wider mb-2">Demo Lifecycle</div>
+            <div className="text-[10px] font-semibold text-[#9ca3af] uppercase tracking-wider mb-2">Recovery Lifecycle</div>
             <div className="flex items-center gap-1.5 text-[11px]">
               <StepDot done label="Fail" />
               <StepLine />
@@ -900,7 +910,7 @@ function PaymentSection({ addToHistory, updateHistoryStatus }: SectionProps) {
                 </>
               )}
 
-              {phase === 'approved' && (
+              {showRecoveryButton && (
                 <>
                   <p className="text-[12px] text-[#1e40af] m-0">
                     Email sent to {result.simulation.customer_email}. Simulate the customer updating their payment method and paying.
@@ -962,7 +972,7 @@ function CheckoutSection({ addToHistory, updateHistoryStatus }: SectionProps) {
   const navigate = useNavigate();
   const [stage, setStage] = useState('PAYMENT');
   const [amount, setAmount] = useState(2499);
-  const [email, setEmail] = useState('demo@razorpay.com');
+  const [email, setEmail] = useState('ajogdand112@gmail.com');
   const [product, setProduct] = useState('Annual Premium Plan');
   const [phase, setPhase] = useState<CheckoutPhase>('input');
   const [simResult, setSimResult] = useState<CheckoutSimResult | null>(null);
@@ -1313,4 +1323,171 @@ function StepDot({ done, active, label }: { done?: boolean; active?: boolean; la
 
 function StepLine() {
   return <div className="w-4 h-px bg-[#e5e8ec] mt-[-8px]" />;
+}
+
+
+// ═══════════════════════════════════════════════
+// Subscription Section
+// ═══════════════════════════════════════════════
+
+const URGENCY_COLORS: Record<string, { text: string; bg: string }> = {
+  high: { text: '#ef4444', bg: '#fef2f2' },
+  medium: { text: '#d97706', bg: '#fffbeb' },
+  low: { text: '#16a34a', bg: '#f0fdf4' },
+};
+
+function SubscriptionSection() {
+  const navigate = useNavigate();
+  const [loading, setLoading] = useState(true);
+  const [recurring, setRecurring] = useState<SubscriptionFailure[]>([]);
+  const [stats, setStats] = useState<SubscriptionStats | null>(null);
+  const [simulating, setSimulating] = useState(false);
+
+  const loadData = async () => {
+    setLoading(true);
+    try {
+      const data = await fetchRecurringFailures();
+      setRecurring(data.subscriptions);
+      setStats(data.stats);
+    } catch {
+      setRecurring([]);
+      setStats(null);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => { loadData(); }, []);
+
+  const handleSimulateMultiple = async () => {
+    setSimulating(true);
+    try {
+      const email = `ajogdand112+${Date.now()}@gmail.com`;
+      const types: FailureType[] = ['SOFT', 'SOFT', 'HARD'];
+      for (const ft of types) {
+        await simulatePayment({
+          failure_type: ft,
+          amount_paise: 99900,
+          customer_email: email,
+        });
+      }
+      message.success(`Simulated 3 failures for ${email} — recurring pattern created`);
+      await loadData();
+    } catch {
+      message.error('Simulation failed');
+    } finally {
+      setSimulating(false);
+    }
+  };
+
+  if (loading) return <div className="flex items-center justify-center py-16"><Spin size="large" /></div>;
+
+  return (
+    <div className="space-y-4">
+      <div className="flex items-center justify-between">
+        <div>
+          <div className="text-[14px] font-semibold text-[#1b1f2b]">Subscription / Recurring Failure Detection</div>
+          <div className="text-[12px] text-[#7b8294]">Simulate multiple failures for the same customer to trigger subscription recovery</div>
+        </div>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={handleSimulateMultiple}
+            disabled={simulating}
+            className={`flex items-center gap-2 px-4 py-2 rounded-lg text-[13px] font-medium transition-colors ${
+              simulating ? 'bg-[#e5e8ec] text-[#9ca3af] cursor-not-allowed' : 'bg-[#1b1f2b] text-white hover:bg-[#2d3348]'
+            }`}
+          >
+            <ThunderboltOutlined />
+            {simulating ? 'Simulating...' : 'Simulate Recurring Failures'}
+          </button>
+          <button
+            onClick={() => navigate('/subscriptions')}
+            className="flex items-center gap-2 px-4 py-2 rounded-lg text-[13px] font-medium bg-[#528FF0] text-white hover:bg-[#4080e0] transition-colors"
+          >
+            <SyncOutlined /> View Full Dashboard
+          </button>
+        </div>
+      </div>
+
+      {/* Stats */}
+      <div className="grid grid-cols-4 gap-3">
+        <div className="border border-[#e5e8ec] rounded-lg p-4 text-center">
+          <div className="text-[24px] font-extrabold text-[#1b1f2b]">{stats?.recurring_groups ?? 0}</div>
+          <div className="text-[10px] text-[#9ca3af] uppercase tracking-wider mt-1">Recurring Groups</div>
+        </div>
+        <div className="border border-[#e5e8ec] rounded-lg p-4 text-center">
+          <div className="text-[24px] font-extrabold text-[#ef4444]">{stats?.structural_count ?? 0}</div>
+          <div className="text-[10px] text-[#9ca3af] uppercase tracking-wider mt-1">Structural</div>
+        </div>
+        <div className="border border-[#e5e8ec] rounded-lg p-4 text-center">
+          <div className="text-[24px] font-extrabold text-[#d97706]">{stats?.chronic_count ?? 0}</div>
+          <div className="text-[10px] text-[#9ca3af] uppercase tracking-wider mt-1">Chronic</div>
+        </div>
+        <div className="border border-[#e5e8ec] rounded-lg p-4 text-center">
+          {(() => {
+            const totalAtRisk = stats?.total_at_risk_paise ?? 0;
+            const recoveredPaise = recurring
+              .filter(s => s.triggered_action?.status === 'SUCCEEDED' || s.existing_actions?.some(a => a.status === 'SUCCEEDED'))
+              .reduce((sum, s) => sum + s.total_amount_paise, 0);
+            const netAtRisk = Math.max(0, totalAtRisk - recoveredPaise);
+            const recoveryPct = totalAtRisk > 0 ? Math.round((recoveredPaise / totalAtRisk) * 100) : 0;
+            return (
+              <>
+                <div className="text-[24px] font-extrabold text-[#528FF0]">
+                  ₹{(netAtRisk / 100).toLocaleString('en-IN')}
+                </div>
+                <div className="text-[10px] text-[#9ca3af] uppercase tracking-wider mt-1">At Risk Amount</div>
+                {recoveredPaise > 0 && (
+                  <div className="text-[10px] text-[#22c55e] mt-0.5">
+                    ₹{(recoveredPaise / 100).toLocaleString('en-IN')} recovered ({recoveryPct}%)
+                  </div>
+                )}
+              </>
+            );
+          })()}
+        </div>
+      </div>
+
+      {/* Recurring list */}
+      {recurring.length === 0 ? (
+        <div className="border border-[#e5e8ec] rounded-lg px-5 py-10 text-center">
+          <ExclamationCircleFilled className="text-[24px] text-[#d4d4d4] mb-2" />
+          <div className="text-[13px] text-[#9ca3af]">No recurring failures detected yet.</div>
+          <div className="text-[11px] text-[#b0b7c3] mt-1">Click "Simulate Recurring Failures" to create a pattern for the same customer.</div>
+        </div>
+      ) : (
+        <div className="space-y-2">
+          {recurring.slice(0, 5).map((sub) => {
+            const u = URGENCY_COLORS[sub.recommendation.urgency] || URGENCY_COLORS.low;
+            return (
+              <div key={sub.group_key} className="border border-[#e5e8ec] rounded-lg px-4 py-3 hover:border-[#c4c9d4] transition-colors">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-3">
+                    <span className="text-[12px] font-medium text-[#1b1f2b]">{sub.customer_email || sub.customer_id.slice(0, 16)}</span>
+                    <span className="text-[11px] font-medium px-2 py-0.5 rounded" style={{ color: u.text, backgroundColor: u.bg }}>
+                      {sub.recommendation.urgency.toUpperCase()}
+                    </span>
+                    <span className="text-[11px] text-[#9ca3af]">{sub.failure_count}× failed</span>
+                  </div>
+                  <div className="flex items-center gap-3">
+                    <span className="text-[12px] font-semibold text-[#1b1f2b]">
+                      ₹{(sub.total_amount_paise / 100).toLocaleString('en-IN')}
+                    </span>
+                    <span className="text-[11px] text-[#7b8294] bg-[#f3f4f6] px-2 py-0.5 rounded">
+                      {sub.recommendation.label}
+                    </span>
+                  </div>
+                </div>
+              </div>
+            );
+          })}
+          {recurring.length > 5 && (
+            <div className="text-center text-[11px] text-[#9ca3af] py-1">
+              +{recurring.length - 5} more — <span className="text-[#528FF0] cursor-pointer hover:underline" onClick={() => navigate('/subscriptions')}>view all</span>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
 }

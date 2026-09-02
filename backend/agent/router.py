@@ -485,7 +485,7 @@ async def deny_email(
 
 @router.post("/batch-process")
 async def batch_process_with_agent(
-    merchant_id: str = "merchant_demo_001",
+    merchant_id: str = "merch_cloudnine_tech",
     limit: int = Query(10, le=50),
     db: AsyncSession = Depends(get_db),
 ):

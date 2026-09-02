@@ -20,7 +20,7 @@ router = APIRouter(prefix="/dashboard", tags=["dashboard"])
 
 @router.get("/events")
 async def list_failure_events(
-    merchant_id: str = "merchant_demo_001",
+    merchant_id: str = "merch_cloudnine_tech",
     limit: int = Query(50, le=200),
     offset: int = 0,
     failure_class: str | None = None,
@@ -216,7 +216,7 @@ async def list_failure_events(
 
 @router.get("/summary")
 async def dashboard_summary(
-    merchant_id: str = "merchant_demo_001",
+    merchant_id: str = "merch_cloudnine_tech",
     db: AsyncSession = Depends(get_db),
 ):
     """
@@ -372,7 +372,7 @@ class ResolveExceptionRequest(BaseModel):
 async def resolve_exception(
     event_id: str,
     body: ResolveExceptionRequest,
-    merchant_id: str = "merchant_demo_001",
+    merchant_id: str = "merch_cloudnine_tech",
     db: AsyncSession = Depends(get_db),
 ):
     """Mark an exception queue item as resolved by a human reviewer."""
@@ -406,7 +406,7 @@ async def resolve_exception(
 
 @router.get("/exceptions/resolutions")
 async def list_resolutions(
-    merchant_id: str = "merchant_demo_001",
+    merchant_id: str = "merch_cloudnine_tech",
     db: AsyncSession = Depends(get_db),
 ):
     """Get all resolved exception IDs for the merchant."""

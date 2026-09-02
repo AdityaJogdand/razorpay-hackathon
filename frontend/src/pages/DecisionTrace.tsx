@@ -1,13 +1,11 @@
 import { useState, useEffect, useRef, useMemo } from 'react';
-import { useNavigate } from 'react-router-dom';
-import { Table, Drawer, Tooltip, Timeline, Spin, Empty, Alert, Input, Select, Button, message } from 'antd';
+import { Table, Drawer, Tooltip, Timeline, Spin, Empty, Input, Select, Button, message } from 'antd';
 import {
   InfoCircleOutlined,
   RightOutlined,
   CheckCircleFilled,
   CloseCircleFilled,
   WarningFilled,
-  ClockCircleOutlined,
   ArrowRightOutlined,
   ReloadOutlined,
   MailOutlined,
@@ -155,66 +153,14 @@ function humanReason(reason: string): string {
 }
 
 type SortKey = 'amount_asc' | 'amount_desc' | 'time_asc' | 'time_desc' | '';
-type ChartGranularity = 'day' | 'month' | 'year';
-
-// ---- Recovered-amount trend helpers ----
-
-function bucketKey(date: Date, granularity: ChartGranularity): string {
-  if (granularity === 'day') return date.toISOString().slice(0, 10); // YYYY-MM-DD
-  if (granularity === 'month') return date.toISOString().slice(0, 7); // YYYY-MM
-  return String(date.getFullYear()); // YYYY
-}
-
-function bucketLabel(key: string, granularity: ChartGranularity): string {
-  if (granularity === 'day') {
-    return new Date(key).toLocaleDateString('en-IN', { day: 'numeric', month: 'short' });
-  }
-  if (granularity === 'month') {
-    const [y, m] = key.split('-').map(Number);
-    return new Date(y, m - 1, 1).toLocaleDateString('en-IN', { month: 'short', year: '2-digit' });
-  }
-  return key;
-}
-
-function buildRecoveredChartData(transactions: Transaction[], granularity: ChartGranularity) {
-  const totals: Record<string, number> = {};
-  transactions.forEach((t) => {
-    if (t.outcome !== 'recovered') return;
-    const raw = t.resolved_at || t.failed_at;
-    if (!raw) return;
-    const d = new Date(raw);
-    if (Number.isNaN(d.getTime())) return;
-    const key = bucketKey(d, granularity);
-    totals[key] = (totals[key] || 0) + t.amount;
-  });
-
-  const bucketCount = granularity === 'day' ? 7 : granularity === 'month' ? 6 : 5;
-  const now = new Date();
-  const keys: string[] = [];
-  for (let i = bucketCount - 1; i >= 0; i--) {
-    const d = new Date(now);
-    if (granularity === 'day') d.setDate(d.getDate() - i);
-    else if (granularity === 'month') d.setMonth(d.getMonth() - i);
-    else d.setFullYear(d.getFullYear() - i);
-    keys.push(bucketKey(d, granularity));
-  }
-
-  return keys.map((key) => ({
-    label: bucketLabel(key, granularity),
-    amount: Math.round((totals[key] || 0) / 100),
-  }));
-}
 
 export default function DecisionTrace() {
-  const navigate = useNavigate();
   const [drawerTxn, setDrawerTxn] = useState<Transaction | null>(null);
   const [transactions, setTransactions] = useState<Transaction[]>([]);
   const [summary, setSummary] = useState<DashboardSummary | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const wsRef = useRef<WebSocket | null>(null);
-  const aboveTableRef = useRef<HTMLDivElement>(null);
-  const [tableScrollY, setTableScrollY] = useState(300);
 
   // Filter / sort / page state
   const [search, setSearch] = useState('');
@@ -223,9 +169,6 @@ export default function DecisionTrace() {
   const [sortKey, setSortKey] = useState<SortKey>('');
   const [currentPage, setCurrentPage] = useState(1);
   const PAGE_SIZE = 20;
-
-  // Recovered-amount trend chart state
-  const [chartGranularity, setChartGranularity] = useState<ChartGranularity>('day');
 
   const loadData = async () => {
     try {
@@ -267,20 +210,10 @@ export default function DecisionTrace() {
     };
   }, []);
 
-  // Keep enough vertical space for at least five transaction rows.
-  // The page can scroll vertically when the dashboard content is taller than the viewport.
-  const TABLE_SCROLL_Y = 300;
-
-  const recoveredChartData = useMemo(
-    () => buildRecoveredChartData(transactions, chartGranularity),
-    [transactions, chartGranularity]
-  );
-
   // Derived: filtered + sorted rows
   const displayedTransactions = (() => {
     let rows = [...transactions];
 
-    // Search: match id, merchant, email, decline_reason, decline_code
     if (search.trim()) {
       const q = search.trim().toLowerCase();
       rows = rows.filter((t) =>
@@ -292,17 +225,14 @@ export default function DecisionTrace() {
       );
     }
 
-    // Filter by failure class
     if (filterClass) {
       rows = rows.filter((t) => t.failure_class === filterClass);
     }
 
-    // Filter by outcome
     if (filterOutcome) {
       rows = rows.filter((t) => t.outcome === filterOutcome);
     }
 
-    // Sort
     if (sortKey === 'amount_asc') rows.sort((a, b) => a.amount - b.amount);
     if (sortKey === 'amount_desc') rows.sort((a, b) => b.amount - a.amount);
     if (sortKey === 'time_asc') rows.sort((a, b) => new Date(a.failed_at).getTime() - new Date(b.failed_at).getTime());
@@ -312,11 +242,9 @@ export default function DecisionTrace() {
   })();
 
   const hasFilters = search || filterClass || filterOutcome || sortKey;
-
   const totalPages = Math.ceil(displayedTransactions.length / PAGE_SIZE);
   const pagedTransactions = displayedTransactions.slice((currentPage - 1) * PAGE_SIZE, currentPage * PAGE_SIZE);
 
-  // Reset to page 1 whenever filters change
   useEffect(() => { setCurrentPage(1); }, [search, filterClass, filterOutcome, sortKey]);
 
   const recoveredAmount = summary
@@ -326,10 +254,6 @@ export default function DecisionTrace() {
   const suppressedCount = summary
     ? summary.override_count
     : transactions.filter((t) => t.guardrail_status === 'overridden' || t.outcome === 'suppressed').length;
-
-  const pendingCount = summary
-    ? summary.pending_count
-    : transactions.filter((t) => t.outcome === 'pending').length;
 
   const failedCount = summary
     ? summary.exception_count
@@ -358,6 +282,8 @@ export default function DecisionTrace() {
     }
     return points;
   }, [transactions]);
+
+  const TABLE_SCROLL_Y = 300;
 
   const columns = [
     {
@@ -564,13 +490,14 @@ export default function DecisionTrace() {
           <div className="bg-white rounded-lg border border-[#e5e8ec] px-5 flex flex-col justify-center" style={{ minHeight: 140 }}>
             <div className="text-[11px] text-[#9ca3af] font-semibold uppercase tracking-wider mb-3">At Risk</div>
             <div className="text-[30px] font-extrabold text-[#1b1f2b] tracking-tight leading-none mb-1.5">
-              ₹{Math.floor((summary?.total_at_risk_paise || 0) / 100).toLocaleString('en-IN')}
+              ₹{Math.floor(Math.max(0, (summary?.total_at_risk_paise || 0) - recoveredAmount) / 100).toLocaleString('en-IN')}
             </div>
             <div className="text-[12px] text-[#9ca3af]">
               {transactions.length} failures tracked
               {recoveredAmount > 0 && (
                 <span className="text-[#22c55e] ml-1">
-                  · ₹{Math.floor(recoveredAmount / 100).toLocaleString('en-IN')} saved
+                  · ₹{Math.floor(recoveredAmount / 100).toLocaleString('en-IN')} recovered
+                  ({Math.round((recoveredAmount / (summary?.total_at_risk_paise || 1)) * 100)}%)
                 </span>
               )}
             </div>
@@ -620,7 +547,6 @@ export default function DecisionTrace() {
                 <YAxis tick={{ fontSize: 10, fill: '#9ca3af' }} axisLine={false} tickLine={false} width={50} tickFormatter={(v: number) => `₹${v.toLocaleString('en-IN')}`} />
                 <RechartsTooltip
                   contentStyle={{ fontSize: 12, borderRadius: 8, border: '1px solid #e5e8ec', boxShadow: '0 2px 8px rgba(0,0,0,0.06)' }}
-                  formatter={(value: number, name: string) => [`₹${value.toLocaleString('en-IN')}`, name === 'recovered' ? 'Recovered' : 'At Risk']}
                 />
                 <Area type="monotone" dataKey="atRisk" stroke="#d1d5db" strokeWidth={1.5} fill="url(#gradAtRisk)" />
                 <Area type="monotone" dataKey="recovered" stroke="#22c55e" strokeWidth={2} fill="url(#gradRecovered)" />
@@ -753,8 +679,6 @@ export default function DecisionTrace() {
           </div>
         </div>
 
-      </div>{/* end aboveTableRef */}
-
       {/* TABLE — only this scrolls */}
       {transactions.length === 0 ? (
         <Empty description="No failure events found. Ingest some data via POST /ingest/webhook" />
@@ -801,46 +725,54 @@ export default function DecisionTrace() {
         {drawerTxn && <TransactionDetail txn={drawerTxn} onClose={() => setDrawerTxn(null)} onRefresh={loadData} />}
       </Drawer>
     </div>
+    </div>
   );
 }
 
-function getOutreachRecommendation(txn: Transaction): { method: 'call' | 'email'; reason: string; score: number } {
-  let callScore = 0;
-  let emailScore = 0;
-  const reasons: string[] = [];
+interface OutreachRec {
+  method: 'call' | 'email';
+  reason: string;
+  score: number;
+}
+
+function getOutreachRecommendation(txn: Transaction): OutreachRec {
+  // If email already sent but not recovered → escalate to voice call
+  if (txn.outcome === 'contacted') {
+    return { method: 'call', reason: 'Email already sent — escalating to voice call', score: 5 };
+  }
+  if (txn.outcome === 'escalated') {
+    return { method: 'call', reason: 'Case escalated — needs direct customer contact', score: 5 };
+  }
+
+  // Align with agent's recommended action
+  const action = (txn.proposed_action || '').toLowerCase();
+  const isAgentEmail = action.includes('email') || action.includes('contact');
+  const isAgentRetry = action.includes('retry');
 
   const amountRs = txn.amount / 100;
 
-  // High value → call (personal touch matters more)
-  if (amountRs >= 10000) { callScore += 3; reasons.push('High-value payment (Rs ' + amountRs.toLocaleString('en-IN') + ')'); }
-  else if (amountRs >= 5000) { callScore += 1; }
-  else { emailScore += 2; }
+  // HARD/MANDATE + high value → voice call even if agent said email
+  if ((txn.failure_class === 'HARD' || txn.failure_class === 'MANDATE') && amountRs >= 3000) {
+    return { method: 'call', reason: `${txn.failure_class === 'HARD' ? 'Hard decline' : 'Mandate failure'} on ₹${amountRs.toLocaleString('en-IN')} — voice call for guided resolution`, score: 4 };
+  }
 
-  // HARD failures need explanation → call
-  if (txn.failure_class === 'HARD') { callScore += 2; reasons.push('Hard decline requires customer action with bank'); }
-  // MANDATE failures are complex → call
-  else if (txn.failure_class === 'MANDATE') { callScore += 2; reasons.push('Mandate issues need guided resolution'); }
-  // SOFT failures are simple retries → email
-  else if (txn.failure_class === 'SOFT') { emailScore += 2; reasons.push('Soft decline — simple retry nudge is enough'); }
-  // UNKNOWN → call for clarity
-  else { callScore += 1; reasons.push('Unknown failure needs personal follow-up'); }
+  // If agent recommended email/contact → outreach via email
+  if (isAgentEmail) {
+    return { method: 'email', reason: 'Agent recommended customer outreach via email', score: 3 };
+  }
 
-  // Already contacted via email but not recovered → escalate to call
-  if (txn.outcome === 'contacted') { callScore += 3; reasons.push('Email already sent — escalating to voice call'); }
+  // If agent recommended retry → email as backup notification
+  if (isAgentRetry) {
+    return { method: 'email', reason: 'Retry scheduled — email as backup if retry fails', score: 2 };
+  }
 
-  // Already escalated → call
-  if (txn.outcome === 'escalated') { callScore += 2; reasons.push('Case escalated — needs direct customer contact'); }
+  // High-value → voice call
+  if (amountRs >= 10000) {
+    return { method: 'call', reason: 'High-value payment (₹' + amountRs.toLocaleString('en-IN') + ') — personal outreach recommended', score: 4 };
+  }
 
-  // Card instrument issues → usually needs bank contact → call
-  if (txn.instrument.toLowerCase().includes('card') && txn.failure_class === 'HARD') { callScore += 1; }
-
-  // UPI/wallet are usually quick fixes → email
-  if (txn.instrument.toLowerCase().includes('upi') || txn.instrument.toLowerCase().includes('wallet')) { emailScore += 1; }
-
-  const isCall = callScore > emailScore;
-  const topReason = reasons.length > 0 ? reasons[0] : (isCall ? 'Based on failure pattern analysis' : 'Low-complexity issue suitable for email');
-
-  return { method: isCall ? 'call' : 'email', reason: topReason, score: isCall ? callScore : emailScore };
+  // Default: email
+  return { method: 'email', reason: 'Standard outreach via email', score: 2 };
 }
 
 function DetailBadge({ icon, label }: { icon: React.ReactNode; label: string }) {

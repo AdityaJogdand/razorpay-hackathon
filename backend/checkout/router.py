@@ -102,10 +102,10 @@ DROP_OFF_REASONS = {
 class SimulateCheckoutRequest(BaseModel):
     drop_off_stage: str = Field(..., pattern="^(LANDING|CONTACT|ADDRESS|PAYMENT|INITIATED|FAILED)$")
     amount_paise: int = Field(default=249900, gt=0, le=10000000)
-    customer_email: str = Field(default="demo@razorpay.com")
+    customer_email: str = Field(default="ajogdand112@gmail.com")
     customer_phone: str = Field(default="+91-98765-43210")
-    product_name: str = Field(default="Annual Premium Plan")
-    merchant_id: str = Field(default="merchant_demo_001")
+    product_name: str = Field(default="StreamBox Premium — Annual Plan")
+    merchant_id: str = Field(default="merch_cloudnine_tech")
 
 
 @router.post("/simulate")
@@ -222,7 +222,7 @@ async def checkout_stats():
 
 def _build_recovery_email(event: dict) -> tuple[dict, str]:
     """Build the next recovery email draft and return (email_dict, next_stage)."""
-    merchant_name = event["merchant_id"].replace("merchant_", "").replace("_", " ").title()
+    merchant_name = event["merchant_id"].replace("merch_", "").replace("merchant_", "").replace("_", " ").title()
     amount_display = event["amount_display"]
     product = event["product_name"]
     emails_sent = event["recovery_emails_sent"]
@@ -232,13 +232,14 @@ def _build_recovery_email(event: dict) -> tuple[dict, str]:
             "subject": f"You left something behind — {product}",
             "body": (
                 f"Hi,\n\n"
-                f"Looks like you didn't finish checking out for {product} ({amount_display}).\n\n"
+                f"We noticed you started a purchase for {product} ({amount_display}) on "
+                f"{merchant_name} but didn't complete checkout.\n\n"
                 f"No worries — your cart is still saved. You can pick up right where "
                 f"you left off:\n\n"
-                f"[Complete your purchase]\n\n"
-                f"If you ran into any issues during checkout, just reply to this email "
-                f"and we'll help you out.\n\n"
-                f"Thanks,\n{merchant_name}"
+                f"[Complete Your Purchase]\n\n"
+                f"If you ran into any issues during checkout, our support team is "
+                f"happy to help.\n\n"
+                f"Regards,\nRazorpay Team"
             ),
         })
         return email, RecoveryStage.REMINDER_1H.value
@@ -248,15 +249,16 @@ def _build_recovery_email(event: dict) -> tuple[dict, str]:
             "subject": f"Still interested in {product}?",
             "body": (
                 f"Hi,\n\n"
-                f"We noticed you started checking out for {product} ({amount_display}) "
-                f"but didn't complete the payment.\n\n"
+                f"We're reaching out from the Razorpay team. You started checking out "
+                f"for {product} ({amount_display}) on {merchant_name} but didn't "
+                f"complete the payment.\n\n"
                 f"Here's what you can expect:\n"
                 f"- Secure payment via UPI, cards, or net banking\n"
                 f"- Instant confirmation once payment is complete\n"
                 f"- Full refund if you change your mind within 7 days\n\n"
-                f"[Complete your purchase]\n\n"
+                f"[Complete Your Purchase]\n\n"
                 f"If you had trouble with the payment process, we're here to help.\n\n"
-                f"Thanks,\n{merchant_name}"
+                f"Regards,\nRazorpay Team"
             ),
         })
         return email, RecoveryStage.REMINDER_24H.value
@@ -266,12 +268,13 @@ def _build_recovery_email(event: dict) -> tuple[dict, str]:
             "subject": f"Last chance — your {product} cart expires soon",
             "body": (
                 f"Hi,\n\n"
-                f"Your saved cart for {product} ({amount_display}) will expire soon.\n\n"
+                f"Your saved cart for {product} ({amount_display}) on {merchant_name} "
+                f"will expire soon.\n\n"
                 f"If you'd still like to proceed, you can complete your purchase here:\n\n"
-                f"[Complete your purchase]\n\n"
+                f"[Complete Your Purchase]\n\n"
                 f"If now isn't the right time, no problem — you can always come back "
                 f"and start fresh when you're ready.\n\n"
-                f"Thanks,\n{merchant_name}"
+                f"Regards,\nRazorpay Team"
             ),
         })
         return email, RecoveryStage.FINAL_72H.value

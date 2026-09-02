@@ -11,6 +11,8 @@ import AuditLedger from './pages/AuditLedger';
 import MandateSequencer from './pages/MandateSequencer';
 import CheckoutRecovery from './pages/CheckoutRecovery';
 import VoiceRecovery from './pages/VoiceRecovery';
+import SubscriptionRecovery from './pages/SubscriptionRecovery';
+
 
 
 const themeConfig = {
@@ -51,6 +53,7 @@ function App() {
             <Route path="/mandates" element={<MandateSequencer />} />
             <Route path="/checkout" element={<CheckoutRecovery />} />
             <Route path="/voice" element={<VoiceRecovery />} />
+            <Route path="/subscriptions" element={<SubscriptionRecovery />} />
           </Route>
         </Routes>
       </BrowserRouter>

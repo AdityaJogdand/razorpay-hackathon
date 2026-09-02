@@ -42,7 +42,7 @@ router = APIRouter(prefix="/mandate", tags=["mandate"])
 
 @router.get("/sequences")
 async def list_mandate_sequences(
-    merchant_id: str = "merchant_demo_001",
+    merchant_id: str = "merch_cloudnine_tech",
     limit: int = Query(50, le=200),
     db: AsyncSession = Depends(get_db),
 ):
@@ -501,7 +501,7 @@ async def advance_mandate_sequence(
 
 @router.get("/stats")
 async def mandate_stats(
-    merchant_id: str = "merchant_demo_001",
+    merchant_id: str = "merch_cloudnine_tech",
     db: AsyncSession = Depends(get_db),
 ):
     """Mandate recovery stats — sub-type breakdown and sequence progress."""

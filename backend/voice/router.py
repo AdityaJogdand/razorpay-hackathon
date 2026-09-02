@@ -1,8 +1,9 @@
-"""Voice recovery module – Hinglish call script generation + ElevenLabs TTS."""
+"""Voice recovery module – call script generation + ElevenLabs TTS + promise-to-pay tracking."""
 
 from __future__ import annotations
 
 import os
+from datetime import datetime, timezone
 from uuid import UUID
 
 import httpx
@@ -17,6 +18,10 @@ from backend.core.database import get_db
 from backend.models.tables import FailureEvent
 
 router = APIRouter(prefix="/voice", tags=["voice"])
+
+# ── In-memory promise-to-pay store ─────────────────────────────────────────
+# In production this would be a DB table; for the hackathon demo, in-memory is fine.
+_promise_store: dict[str, dict] = {}  # event_id -> { committed, recorded_at, notes }
 
 # ── Available voices ────────────────────────────────────────────────────────
 
@@ -36,6 +41,11 @@ DEFAULT_VOICE_ID = "EXAVITQu4vr4xnSDxMaL"
 class SynthesizeRequest(BaseModel):
     script: str
     voice_id: str | None = None
+
+
+class PromiseRequest(BaseModel):
+    committed: bool
+    notes: str | None = None
 
 
 # ── Helpers ─────────────────────────────────────────────────────────────────
@@ -168,3 +178,45 @@ async def synthesize(event_id: UUID, body: SynthesizeRequest):
 async def list_voices():
     """Return available voice options for TTS synthesis."""
     return {"voices": VOICES}
+
+
+# ── Promise-to-Pay endpoints ──────────────────────────────────────────────
+
+@router.post("/promise/{event_id}")
+async def record_promise(event_id: UUID, body: PromiseRequest):
+    """Record whether the customer committed to pay after the voice call."""
+    key = str(event_id)
+    _promise_store[key] = {
+        "event_id": key,
+        "committed": body.committed,
+        "notes": body.notes,
+        "recorded_at": datetime.now(timezone.utc).isoformat(),
+    }
+    return _promise_store[key]
+
+
+@router.get("/promise/{event_id}")
+async def get_promise(event_id: UUID):
+    """Get promise-to-pay status for an event."""
+    key = str(event_id)
+    if key not in _promise_store:
+        return {"event_id": key, "committed": None, "recorded_at": None}
+    return _promise_store[key]
+
+
+@router.get("/promises")
+async def list_promises():
+    """Return all promise-to-pay records with summary stats."""
+    records = list(_promise_store.values())
+    total = len(records)
+    committed = sum(1 for r in records if r["committed"])
+    declined = total - committed
+    return {
+        "promises": records,
+        "stats": {
+            "total": total,
+            "committed": committed,
+            "declined": declined,
+            "commitment_rate": round(committed / total * 100, 1) if total > 0 else 0,
+        },
+    }

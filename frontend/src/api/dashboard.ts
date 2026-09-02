@@ -445,3 +445,114 @@ export function getVoiceSynthesizeUrl(eventId: string): string {
   const base = api.defaults.baseURL || 'http://localhost:8000';
   return `${base}/voice/synthesize/${eventId}`;
 }
+
+// ── Promise-to-Pay API ──
+
+export async function recordPromise(eventId: string, committed: boolean, notes?: string): Promise<{
+  event_id: string;
+  committed: boolean;
+  notes: string | null;
+  recorded_at: string;
+}> {
+  const { data } = await api.post(`/voice/promise/${eventId}`, { committed, notes });
+  return data;
+}
+
+export async function fetchPromises(): Promise<{
+  promises: Array<{ event_id: string; committed: boolean; notes: string | null; recorded_at: string }>;
+  stats: { total: number; committed: number; declined: number; commitment_rate: number };
+}> {
+  const { data } = await api.get('/voice/promises');
+  return data;
+}
+
+// ── Subscription Recovery API ──
+
+export interface SubscriptionFailure {
+  group_key: string;
+  subscription_id: string | null;
+  customer_id: string;
+  merchant_id: string;
+  customer_email: string;
+  instrument_type: string;
+  instrument_token: string;
+  failure_count: number;
+  total_amount_paise: number;
+  latest_failure: {
+    id: string;
+    transaction_id: string;
+    subscription_id: string | null;
+    amount_paise: number;
+    failure_class: string;
+    decline_code: string;
+    decline_reason: string;
+    instrument_type: string;
+    customer_email: string;
+    failed_at: string;
+  };
+  failures: Array<{
+    id: string;
+    transaction_id: string;
+    amount_paise: number;
+    failure_class: string;
+    decline_code: string;
+    decline_reason: string;
+    failed_at: string;
+  }>;
+  recommendation: {
+    diagnosis: 'structural' | 'temporary' | 'chronic';
+    action: string;
+    label: string;
+    description: string;
+    urgency: string;
+    retryable: boolean;
+  };
+  existing_actions: Array<{
+    id: string;
+    action_type: string;
+    status: string;
+    executed_at: string | null;
+    outcome: Record<string, unknown> | null;
+  }>;
+  triggered_action: {
+    action: string;
+    action_type: string;
+    action_id: string;
+    status: string;
+    detail: string;
+    triggered_at: string;
+  } | null;
+}
+
+export interface SubscriptionStats {
+  total_groups: number;
+  recurring_groups: number;
+  total_at_risk_paise: number;
+  structural_count: number;
+  chronic_count: number;
+  temporary_count: number;
+  high_urgency: number;
+  medium_urgency: number;
+  actions_triggered: number;
+}
+
+export async function fetchRecurringFailures(): Promise<{
+  subscriptions: SubscriptionFailure[];
+  stats: SubscriptionStats;
+}> {
+  const { data } = await api.get('/subscription/recurring-failures');
+  return data;
+}
+
+export async function triggerSubscriptionRecovery(eventId: string, action: string): Promise<{
+  event_id: string;
+  action: string;
+  action_type: string;
+  action_id: string;
+  status: string;
+  detail: string;
+  executed_at: string | null;
+}> {
+  const { data } = await api.post(`/subscription/trigger/${eventId}`, { action });
+  return data;
+}

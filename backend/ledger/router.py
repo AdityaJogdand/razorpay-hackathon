@@ -13,7 +13,7 @@ router = APIRouter(prefix="/ledger", tags=["ledger"])
 
 @router.post("/verify")
 async def verify_ledger_integrity(
-    merchant_id: str = "merchant_demo_001",
+    merchant_id: str = "merch_cloudnine_tech",
     db: AsyncSession = Depends(get_db),
 ):
     """Walk the hash chain and verify integrity."""
@@ -56,7 +56,7 @@ async def get_entity_audit_trail(
 
 @router.get("/count")
 async def ledger_count(
-    merchant_id: str = "merchant_demo_001",
+    merchant_id: str = "merch_cloudnine_tech",
     db: AsyncSession = Depends(get_db),
 ):
     """Get total number of ledger entries."""
@@ -66,7 +66,7 @@ async def ledger_count(
 
 @router.get("/recent")
 async def recent_entries(
-    merchant_id: str = "merchant_demo_001",
+    merchant_id: str = "merch_cloudnine_tech",
     limit: int = Query(default=50, le=200),
     db: AsyncSession = Depends(get_db),
 ):

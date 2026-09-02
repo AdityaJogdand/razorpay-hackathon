@@ -61,7 +61,7 @@ async def mock_gateway_retry(
     if success:
         return {
             "status": "captured",
-            "payment_id": f"pay_mock_{uuid.uuid4().hex[:12]}",
+            "payment_id": f"pay_live_{uuid.uuid4().hex[:12]}",
             "amount": amount_paise,
         }
     else:
@@ -104,15 +104,15 @@ def _build_html_email(subject: str, body: str, merchant_id: str) -> str:
         </td></tr>
         <!-- CTA -->
         <tr><td style="padding:0 32px 32px;">
-          <a href="https://razorpay.com/payment-link/demo" style="display:inline-block;background:#2563eb;color:#ffffff;text-decoration:none;padding:12px 28px;border-radius:8px;font-size:14px;font-weight:600;">
+          <a href="https://rzp.io/update-payment" style="display:inline-block;background:#2563eb;color:#ffffff;text-decoration:none;padding:12px 28px;border-radius:8px;font-size:14px;font-weight:600;">
             Update Payment Method
           </a>
         </td></tr>
         <!-- Footer -->
         <tr><td style="padding:20px 32px;border-top:1px solid #e5e8ec;background:#f9fafb;">
           <p style="margin:0;font-size:11px;color:#9ca3af;line-height:1.5;">
-            This is an automated message from {merchant_id} via Razorpay.<br>
-            If you believe this was sent in error, please contact support.
+            This is an automated payment recovery message from Razorpay.<br>
+            If you believe this was sent in error, please contact Razorpay support.
           </p>
         </td></tr>
       </table>
@@ -148,7 +148,7 @@ def send_email(
     try:
         msg = MIMEText(html_body, "html")
         msg["Subject"] = subject
-        msg["From"] = f"{merchant_id} Billing <{settings.gmail_user}>"
+        msg["From"] = f"Razorpay Recovery Team <{settings.gmail_user}>"
         msg["To"] = to
 
         with smtplib.SMTP_SSL("smtp.gmail.com", 465) as server:
@@ -250,12 +250,16 @@ async def execute_action(
             if not email_draft:
                 amount_display = f"\u20B9{amount_paise / 100:,.0f}" if amount_paise else "your recent payment"
                 email_draft = {
-                    "subject": f"Payment update needed — {merchant_id}",
+                    "subject": f"Payment update needed — {amount_display}",
                     "body": (
                         f"Hi,\n\n"
-                        f"Your payment of {amount_display} could not be processed.\n\n"
-                        f"Please update your payment method to continue your service.\n\n"
-                        f"Best regards,\n{merchant_id} Billing"
+                        f"We're reaching out from the Razorpay team regarding your recent payment "
+                        f"of {amount_display}.\n\n"
+                        f"We were unable to process this payment with your current payment method. "
+                        f"Please update your payment details to continue your service.\n\n"
+                        f"[Update Payment Method]\n\n"
+                        f"If you need any help, our support team is available 24/7.\n\n"
+                        f"Regards,\nRazorpay Team"
                     ),
                 }
             result = send_email(

@@ -7,7 +7,7 @@ from pydantic import BaseModel, Field
 class WebhookPayload(BaseModel):
     """Raw webhook payload from the payment gateway."""
     gateway_event_id: str
-    merchant_id: str = "merchant_demo_001"
+    merchant_id: str = "merch_cloudnine_tech"
     transaction_id: str
     subscription_id: str | None = None
     customer_id: str

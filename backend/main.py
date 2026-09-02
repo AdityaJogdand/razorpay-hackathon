@@ -18,6 +18,7 @@ from backend.simulate.router import router as simulate_router
 from backend.mandate.router import router as mandate_router
 from backend.checkout.router import router as checkout_router
 from backend.voice.router import router as voice_router
+from backend.subscription.router import router as subscription_router
 
 
 @asynccontextmanager
@@ -67,6 +68,7 @@ app.include_router(simulate_router)
 app.include_router(mandate_router)
 app.include_router(checkout_router)
 app.include_router(voice_router)
+app.include_router(subscription_router)
 
 
 @app.websocket("/ws/dashboard")

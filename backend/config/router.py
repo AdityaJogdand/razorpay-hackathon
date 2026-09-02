@@ -28,7 +28,7 @@ class ConfigUpdateRequest(BaseModel):
 @router.post("/kill-switch")
 async def toggle_kill_switch(
     body: KillSwitchRequest,
-    merchant_id: str = "merchant_demo_001",
+    merchant_id: str = "merch_cloudnine_tech",
     db: AsyncSession = Depends(get_db),
 ):
     """Toggle the kill switch for a merchant."""
@@ -69,7 +69,7 @@ async def toggle_kill_switch(
 
 @router.get("/current")
 async def get_current_config(
-    merchant_id: str = "merchant_demo_001",
+    merchant_id: str = "merch_cloudnine_tech",
     db: AsyncSession = Depends(get_db),
 ):
     """Get the current active config for a merchant."""

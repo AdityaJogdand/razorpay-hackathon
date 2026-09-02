@@ -16,7 +16,7 @@ router = APIRouter(prefix="/execution", tags=["execution"])
 
 @router.get("/stats")
 async def execution_stats(
-    merchant_id: str = "merchant_demo_001",
+    merchant_id: str = "merch_cloudnine_tech",
     db: AsyncSession = Depends(get_db),
 ):
     """Get execution statistics for a merchant."""

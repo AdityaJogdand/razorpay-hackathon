@@ -16,6 +16,7 @@ import {
   ThunderboltOutlined,
   ShoppingCartOutlined,
   PhoneOutlined,
+  SyncOutlined,
 } from '@ant-design/icons';
 import Logo from '../assets/razor-pay-logo.png';
 
@@ -69,11 +70,13 @@ export default function AppLayout() {
     { key: '/exceptions', icon: <FileTextOutlined />, label: 'Exception Queue' },
     { key: '/mandates', icon: <BarChartOutlined />, label: 'Mandate Sequencer' },
     { key: '/checkout', icon: <ShoppingCartOutlined />, label: 'Checkout Recovery' },
-{ 
-  key: '/voice', 
-  icon: <PhoneOutlined className="scale-x-[-1]" />, 
-  label: 'Voice Recovery' 
-},];
+{
+  key: '/voice',
+  icon: <PhoneOutlined className="scale-x-[-1]" />,
+  label: 'Voice Recovery'
+},
+    { key: '/subscriptions', icon: <SyncOutlined />, label: 'Subscription Recovery' },
+  ];
 
   const auditItems: SidebarItem[] = [
     { key: '/rules', icon: <SafetyOutlined />, label: 'Guardrail Audit' },
@@ -132,10 +135,10 @@ export default function AppLayout() {
             </div>
             <div
               className="flex items-center gap-2.5 px-5 h-[46px] cursor-pointer hover:bg-[#ededed] border-t border-[#e5e8ec]"
-              onClick={() => {}}
+              onClick={verifyLedger}
             >
               <SettingOutlined className="text-[15px] text-[#7b8294]" />
-              <span className="text-[13px] text-[#3b4055]">Account & Settings</span>
+              <span className="text-[13px] text-[#3b4055]">Ledger Integrity Verification</span>
             </div>
           </div>
         </aside>

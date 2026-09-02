@@ -208,7 +208,7 @@ export default function CheckoutRecovery() {
       {/* Events table */}
       {events.length === 0 ? (
         <Empty
-          description="No abandoned checkouts yet — use the Simulation page to create test events"
+          description="No abandoned checkouts yet — simulate a checkout drop-off from the Payment Simulator"
           image={Empty.PRESENTED_IMAGE_SIMPLE}
         />
       ) : (
@@ -351,11 +351,6 @@ function CheckoutDetail({
   const stageColor = STAGE_COLORS[event.drop_off_stage] || '#94a3b8';
   const canSendEmail = !event.recovered && event.customer_email && event.recovery_emails_sent < 3;
   const canComplete = !event.recovered && event.recovery_emails_sent > 0;
-
-  // Get last sent email for preview
-  const lastEmailAction = [...event.recovery_actions]
-    .reverse()
-    .find(a => a.type.startsWith('RECOVERY_EMAIL'));
 
   // Load next email preview
   useEffect(() => {

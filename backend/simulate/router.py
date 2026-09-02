@@ -6,6 +6,7 @@ Endpoints:
   POST /simulate/recover/{id} — simulate customer responding and paying successfully
 """
 
+import hashlib
 import uuid
 import logging
 from datetime import datetime, timezone
@@ -94,8 +95,8 @@ class SimulatePaymentRequest(BaseModel):
     failure_type: str = Field(..., pattern="^(SOFT|HARD|MANDATE|UNKNOWN)$")
     mandate_sub_type: str | None = Field(default=None)
     amount_paise: int = Field(default=150000, gt=0, le=10000000)
-    customer_email: str = Field(default="demo@razorpay.com")
-    merchant_id: str = Field(default="merchant_demo_001")
+    customer_email: str = Field(default="ajogdand112@gmail.com")
+    merchant_id: str = Field(default="merch_cloudnine_tech")
 
 
 @router.post("/payment")
@@ -117,17 +118,17 @@ async def simulate_payment(
     else:
         preset = FAILURE_PRESETS[body.failure_type]
 
-    txn_id = f"pay_{uuid.uuid4().hex[:16]}"
+    txn_id = f"pay_live_{uuid.uuid4().hex[:14]}"
 
     payload = WebhookPayload(
         gateway_event_id=f"evt_{uuid.uuid4().hex[:12]}",
         merchant_id=body.merchant_id,
         transaction_id=txn_id,
-        subscription_id=f"sub_{uuid.uuid4().hex[:8]}",
-        customer_id=f"cust_{uuid.uuid4().hex[:8]}",
+        subscription_id=f"sub_{hashlib.md5((body.customer_email + body.merchant_id).encode()).hexdigest()[:8]}",
+        customer_id=f"cust_{hashlib.md5(body.customer_email.encode()).hexdigest()[:8]}",
         customer_email=body.customer_email,
         instrument_type=preset["instrument_type"],
-        instrument_token=f"tok_{uuid.uuid4().hex[:12]}",
+        instrument_token=f"tok_{hashlib.md5(body.customer_email.encode()).hexdigest()[:12]}",
         error_code=preset["error_code"],
         error_description=preset["error_description"],
         amount_paise=body.amount_paise,
@@ -257,7 +258,7 @@ async def simulate_recovery(
         retry_number=retry_count + 1,
         outcome={
             "status": "captured",
-            "payment_id": f"pay_recovered_{uuid.uuid4().hex[:12]}",
+            "payment_id": f"pay_rcvr_{uuid.uuid4().hex[:12]}",
             "amount": event.amount_paise,
             "recovery_trigger": "customer_responded_to_email",
         },

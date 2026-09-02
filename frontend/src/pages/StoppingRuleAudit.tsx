@@ -1,7 +1,6 @@
 import { useState, useEffect } from 'react';
 import { Table, Tag, Progress, Spin, Empty } from 'antd';
 import { useNavigate } from 'react-router-dom';
-import { CheckCircleFilled, CloseCircleFilled } from '@ant-design/icons';
 import { fetchGuardrailInfo, fetchDashboardEvents, type GuardrailRule, type DashboardEvent } from '../api/dashboard';
 
 interface RuleStats {
@@ -195,7 +194,7 @@ export default function StoppingRuleAudit() {
       </div>
 
       {rules.length === 0 ? (
-        <Empty description="No guardrail data yet. Simulate some payments to see rule activity." />
+        <Empty description="No guardrail activity yet. Process a payment failure to see rule enforcement." />
       ) : (
         <>
           {/* Table */}

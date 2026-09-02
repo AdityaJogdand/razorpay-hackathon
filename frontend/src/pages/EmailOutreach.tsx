@@ -2,13 +2,16 @@ import { useState, useEffect, useRef } from 'react';
 import { Segmented, Drawer, Empty, Spin, Tag } from 'antd';
 import {
   CheckCircleFilled,
-  CloseCircleFilled,
   MailOutlined,
   StopOutlined,
 } from '@ant-design/icons';
 import { fetchDashboardEvents, type DashboardEvent } from '../api/dashboard';
 
 type FilterType = 'All' | 'Sent' | 'Suppressed';
+
+function formatMerchant(id: string): string {
+  return id.replace(/^merch_/, '').replace(/^merchant_/, '').replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
+}
 
 interface EmailEntry {
   id: string;
@@ -172,7 +175,7 @@ export default function EmailOutreach() {
                     <span className="text-[#9ca3af]">Subject:</span> {e.subject}
                   </div>
                   <div className="text-[11px] text-[#9ca3af]">
-                    {e.customer_email} &middot; {e.merchant_id} &middot; ₹{(e.amount_paise / 100).toLocaleString('en-IN')}
+                    {e.customer_email} &middot; {formatMerchant(e.merchant_id)} &middot; ₹{(e.amount_paise / 100).toLocaleString('en-IN')}
                     {e.suppression_reason && (
                       <span className="text-[#d97706] ml-2">— {e.suppression_reason}</span>
                     )}
@@ -224,7 +227,7 @@ export default function EmailOutreach() {
             </div>
 
             <div className="mt-4 text-[11px] text-[#9ca3af]">
-              Transaction: {drawerEmail.transaction_id || drawerEmail.id.slice(0, 12)} &middot; {drawerEmail.merchant_id} &middot; ₹{(drawerEmail.amount_paise / 100).toLocaleString('en-IN')}
+              Transaction: {drawerEmail.transaction_id || drawerEmail.id.slice(0, 12)} &middot; {formatMerchant(drawerEmail.merchant_id)} &middot; ₹{(drawerEmail.amount_paise / 100).toLocaleString('en-IN')}
             </div>
           </div>
         )}

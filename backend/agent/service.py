@@ -122,13 +122,15 @@ Analyze this failure and respond with a JSON object:
 
 If you propose RETRY, suggest optimal retry timing in retry_schedule_hours.
 If you propose CONTACT_EMAIL or REAUTH_REQUEST, draft a professional email following this exact format:
-- Subject: clear, concise, no internal IDs (e.g. "Action needed — update your payment method")
+- Subject: clear, concise, no internal IDs (e.g. "Update your payment method — ₹4,999 payment needs attention")
 - Body MUST use this structure with blank lines between paragraphs:
-  "Hi,\\n\\nFirst paragraph about what happened.\\n\\nSecond paragraph about what to do.\\n\\n[Action link text]\\n\\nClosing line.\\n\\nThanks,\\nMerchant Name"
-- Use friendly merchant name (e.g. "Demo 001" not "merchant_demo_001")
+  "Hi,\\n\\nWe're reaching out from the Razorpay team regarding your payment.\\n\\nExplain what happened in simple language.\\n\\n[Action link text]\\n\\nClosing.\\n\\nRegards,\\nRazorpay Team"
 - Format amounts as ₹X,XXX (e.g. ₹4,999 not ₹4999.0)
+- ALWAYS sign off as "Regards,\\nRazorpay Team" — never use merchant name or "[Your Name]"
+- ALWAYS open with "We're reaching out from the Razorpay team"
 - NEVER include internal IDs (pay_xxx, txn_xxx, evt_xxx, cust_xxx, tok_xxx)
-- NEVER use "[Your Name]" — use the merchant name
+- NEVER use technical terms in customer emails: no "HARD decline", "SOFT failure", "guardrail", "agent", "classification", "gateway timeout", "decline code"
+- Convert technical reasons to customer language: card_expired → "Your saved card could not be used", gateway_timeout → "a temporary issue", do_not_honor → "your bank was unable to process"
 - NEVER put the entire email in one paragraph
 If you propose ESCALATE_HUMAN, explain why automated handling isn't safe.
 """
@@ -306,20 +308,20 @@ def _deterministic_fallback(
 
     elif failure_class == "HARD":
         email_draft = None
-        merchant_name = merchant_id.replace("merchant_", "").replace("_", " ").title() if merchant_id else "your service provider"
+        merchant_name = merchant_id.replace("merch_", "").replace("merchant_", "").replace("_", " ").title() if merchant_id else "your service provider"
         if customer_email:
             email_draft = {
-                "subject": f"We could not process your payment of ₹{amount_rupees:,.0f}",
+                "subject": f"Update your payment method — ₹{amount_rupees:,.0f} payment needs attention",
                 "body": (
                     f"Hi,\n\n"
-                    f"We tried to process your payment of ₹{amount_rupees:,.0f} for "
-                    f"{merchant_name}, but it did not go through.\n\n"
-                    f"This usually happens because a card expired or your bank "
-                    f"declined the charge.\n\n"
+                    f"We're reaching out from the Razorpay team regarding your recent payment "
+                    f"of ₹{amount_rupees:,.0f} for {merchant_name}.\n\n"
+                    f"Your saved card could not be used to process this payment. This typically "
+                    f"happens when a card expires or is replaced by your bank.\n\n"
                     f"You can update your payment method here:\n\n"
-                    f"[Update payment method]\n\n"
-                    f"Once updated, your payment will be retried automatically.\n\n"
-                    f"Thanks,\n{merchant_name}"
+                    f"[Update Payment Method]\n\n"
+                    f"Once updated, your payment will be processed automatically.\n\n"
+                    f"Regards,\nRazorpay Team"
                 ),
             }
         return AgentProposal(
@@ -334,20 +336,22 @@ def _deterministic_fallback(
 
     elif failure_class == "MANDATE":
         email_draft = None
-        merchant_name = merchant_id.replace("merchant_", "").replace("_", " ").title() if merchant_id else "your service provider"
+        merchant_name = merchant_id.replace("merch_", "").replace("merchant_", "").replace("_", " ").title() if merchant_id else "your service provider"
         if customer_email:
             email_draft = {
-                "subject": f"Your payment of ₹{amount_rupees:,.0f} needs attention",
+                "subject": f"Re-authorize your mandate — ₹{amount_rupees:,.0f} payment pending",
                 "body": (
                     f"Hi,\n\n"
-                    f"We tried to process your recurring payment of ₹{amount_rupees:,.0f} "
-                    f"for {merchant_name}, but it did not go through because your "
-                    f"payment mandate is no longer active.\n\n"
-                    f"To fix this, please re-authorize your mandate:\n\n"
-                    f"[Re-authorize mandate]\n\n"
+                    f"We're reaching out from the Razorpay team regarding your recurring payment "
+                    f"of ₹{amount_rupees:,.0f} for {merchant_name}.\n\n"
+                    f"Your payment mandate is no longer active, so we were unable to process "
+                    f"this payment. This usually happens when a mandate expires or has been "
+                    f"cancelled.\n\n"
+                    f"To restore automatic payments, please re-authorize your mandate:\n\n"
+                    f"[Re-authorize Mandate]\n\n"
                     f"This takes less than 2 minutes and requires a one-time "
                     f"verification as per RBI guidelines.\n\n"
-                    f"Thanks,\n{merchant_name}"
+                    f"Regards,\nRazorpay Team"
                 ),
             }
         return AgentProposal(
